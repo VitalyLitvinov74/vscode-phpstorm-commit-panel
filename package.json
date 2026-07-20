@@ -1,0 +1,154 @@
+{
+  "name": "phpstorm-git-panel",
+  "displayName": "PhpStorm Commit Panel for VS Code",
+  "description": "JetBrains PhpStorm-style Git commit panel for Visual Studio Code with staged checkboxes, split commit UI, amend, push, and AI commit message generation.",
+  "version": "0.2.0",
+  "publisher": "vetal",
+  "homepage": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel/issues"
+  },
+  "engines": {
+    "vscode": "^1.129.0"
+  },
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "vscode",
+    "visual-studio-code",
+    "phpstorm",
+    "jetbrains",
+    "git",
+    "commit",
+    "commit-panel",
+    "source-control",
+    "staging",
+    "checkboxes",
+    "ai-commit-message",
+    "copilot"
+  ],
+  "activationEvents": [
+    "onView:phpstormGitPanel.changes",
+    "onCommand:phpstormGitPanel.refresh",
+    "onCommand:phpstormGitPanel.stageAll",
+    "onCommand:phpstormGitPanel.unstageAll",
+    "onCommand:phpstormGitPanel.generateCommitMessage",
+    "onCommand:phpstormGitPanel.commit",
+    "onCommand:phpstormGitPanel.commitAndPush"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "phpstormGitPanel.refresh",
+        "title": "Refresh PhpStorm Commit Panel",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "phpstormGitPanel.stageAll",
+        "title": "Check All Changes",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "phpstormGitPanel.unstageAll",
+        "title": "Uncheck All Changes",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "phpstormGitPanel.generateCommitMessage",
+        "title": "Generate Commit Message",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "phpstormGitPanel.commit",
+        "title": "Commit Checked Changes",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "phpstormGitPanel.commitAndPush",
+        "title": "Commit and Push Checked Changes",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "phpstormGitPanel.openSettings",
+        "title": "Open PhpStorm Commit Panel Settings",
+        "category": "PhpStorm Commit Panel",
+        "icon": "$(gear)"
+      }
+    ],
+    "configuration": {
+      "title": "PhpStorm Commit Panel",
+      "properties": {
+        "phpstormGitPanel.autoRefreshIntervalMs": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 1000,
+          "description": "How often the PhpStorm Commit Panel refreshes while visible."
+        }
+      }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "phpstormGitPanel.refresh",
+          "when": "view == phpstormGitPanel.changes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "phpstormGitPanel.stageAll",
+          "when": "view == phpstormGitPanel.changes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "phpstormGitPanel.unstageAll",
+          "when": "view == phpstormGitPanel.changes",
+          "group": "navigation@3"
+        },
+        {
+          "command": "phpstormGitPanel.generateCommitMessage",
+          "when": "view == phpstormGitPanel.changes",
+          "group": "navigation@4"
+        },
+        {
+          "command": "phpstormGitPanel.commit",
+          "when": "view == phpstormGitPanel.changes",
+          "group": "navigation@5"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "phpstormGitPanel",
+          "title": "PhpStorm Git",
+          "icon": "resources/phpstorm-git.svg"
+        }
+      ]
+    },
+    "views": {
+      "phpstormGitPanel": [
+        {
+          "id": "phpstormGitPanel.changes",
+          "name": "PhpStorm Commit",
+          "type": "webview",
+          "when": "workspaceFolderCount != 0"
+        }
+      ]
+    }
+  }
+}
