@@ -8,6 +8,7 @@ const { renderWebview } = require('../src/webview');
 function run() {
   const html = renderWebview({ cspSource: 'vscode-resource:' });
   const extensionSource = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
   assert.match(
     html,
@@ -38,6 +39,16 @@ function run() {
   assert.ok(
     !extensionSource.includes("enqueueOperation('Updating Git index...'"),
     'checkbox staging must not use the blocking busy operation path'
+  );
+  assert.doesNotMatch(
+    extensionSource,
+    /vscode\.window\.show(?:Error|Warning|Information)Message/,
+    'extension must not use VS Code notification popups because they can play notification sounds'
+  );
+  assert.deepEqual(
+    manifest.extensionKind,
+    ['workspace'],
+    'Git panel must run in the workspace/remote extension host so WSL repositories use WSL git'
   );
 }
 

@@ -179,12 +179,7 @@ class PhpStormCommitPanelProvider {
         canGenerate: stagedCount > 0
       };
     } catch (error) {
-      this.state = {
-        ...this.state,
-        errorText: formatError(error),
-        statusText: 'Git status failed'
-      };
-      vscode.window.showErrorMessage(this.state.errorText);
+      this.reportPanelError(error, 'Git status failed');
     } finally {
       this.refreshing = false;
       this.postState();
@@ -313,7 +308,6 @@ class PhpStormCommitPanelProvider {
           ...this.state,
           errorText: formatError(error)
         };
-        vscode.window.showErrorMessage(this.state.errorText);
       } finally {
         this.pendingStagingOperations = Math.max(0, this.pendingStagingOperations - 1);
         this.scheduleRefresh(this.state.errorText ? 0 : 650);
@@ -345,12 +339,12 @@ class PhpStormCommitPanelProvider {
   async generateCommitMessage() {
     const root = this.state.selectedRoot;
     if (!root) {
-      vscode.window.showWarningMessage('Open a Git repository first.');
+      this.reportPanelWarning('Open a Git repository first.');
       return;
     }
 
     if (!this.state.canGenerate) {
-      vscode.window.showWarningMessage('Check at least one change before generating a commit message.');
+      this.reportPanelWarning('Check at least one change before generating a commit message.');
       return;
     }
 
@@ -375,12 +369,12 @@ class PhpStormCommitPanelProvider {
     const message = this.state.message.trim();
 
     if (!root) {
-      vscode.window.showWarningMessage('Open a Git repository first.');
+      this.reportPanelWarning('Open a Git repository first.');
       return;
     }
 
     if (!message) {
-      vscode.window.showWarningMessage('Commit message is required.');
+      this.reportPanelWarning('Commit message is required.');
       return;
     }
 
@@ -486,11 +480,7 @@ class PhpStormCommitPanelProvider {
           await this.refresh();
         }
       } catch (error) {
-        this.state = {
-          ...this.state,
-          errorText: formatError(error)
-        };
-        vscode.window.showErrorMessage(this.state.errorText);
+        this.reportPanelError(error, `${label} failed`);
       } finally {
         this.state = {
           ...this.state,
@@ -502,6 +492,24 @@ class PhpStormCommitPanelProvider {
     });
 
     await this.operation;
+  }
+
+  reportPanelWarning(message) {
+    this.state = {
+      ...this.state,
+      errorText: '',
+      statusText: message
+    };
+    this.postState();
+  }
+
+  reportPanelError(error, statusText) {
+    this.state = {
+      ...this.state,
+      errorText: typeof error === 'string' ? error : formatError(error),
+      statusText: statusText || this.state.statusText
+    };
+    this.postState();
   }
 
   scheduleRefresh(delayMs) {
