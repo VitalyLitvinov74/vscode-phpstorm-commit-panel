@@ -14,22 +14,26 @@ function renderWebview(webview) {
     :root {
       --panel-bg: var(--vscode-sideBar-background);
       --editor-bg: var(--vscode-editor-background);
+      --surface-soft: color-mix(in srgb, var(--vscode-sideBar-background) 84%, var(--vscode-foreground) 16%);
+      --surface-hover: var(--vscode-list-hoverBackground);
+      --surface-active: var(--vscode-list-activeSelectionBackground);
+      --surface-active-fg: var(--vscode-list-activeSelectionForeground);
       --border: var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border));
+      --border-soft: color-mix(in srgb, var(--border) 62%, transparent);
       --muted: var(--vscode-descriptionForeground);
       --text: var(--vscode-foreground);
+      --accent: var(--vscode-focusBorder, var(--vscode-button-background));
       --blue: var(--vscode-button-background);
       --blue-fg: var(--vscode-button-foreground);
       --blue-hover: var(--vscode-button-hoverBackground);
       --input-bg: var(--vscode-input-background);
       --input-border: var(--vscode-input-border);
-      --row-hover: var(--vscode-list-hoverBackground);
-      --row-active: var(--vscode-list-activeSelectionBackground);
-      --row-active-fg: var(--vscode-list-activeSelectionForeground);
       --danger: var(--vscode-errorForeground);
       --success: var(--vscode-gitDecoration-addedResourceForeground);
       --modified: var(--vscode-gitDecoration-modifiedResourceForeground);
       --deleted: var(--vscode-gitDecoration-deletedResourceForeground);
       --untracked: var(--vscode-gitDecoration-untrackedResourceForeground);
+      --left-pane-size: 40%;
     }
 
     * {
@@ -48,6 +52,11 @@ function renderWebview(webview) {
       overflow: hidden;
     }
 
+    body.resizing {
+      cursor: col-resize;
+      user-select: none;
+    }
+
     button,
     textarea,
     select,
@@ -59,12 +68,12 @@ function renderWebview(webview) {
       border: 0;
       color: var(--text);
       background: transparent;
-      border-radius: 3px;
+      border-radius: 4px;
       cursor: pointer;
     }
 
     button:hover:not(:disabled) {
-      background: var(--row-hover);
+      background: var(--surface-hover);
     }
 
     button:disabled {
@@ -74,9 +83,10 @@ function renderWebview(webview) {
 
     .shell {
       display: grid;
-      grid-template-columns: minmax(280px, 40%) minmax(360px, 1fr);
+      grid-template-columns: minmax(260px, var(--left-pane-size)) 6px minmax(360px, 1fr);
       height: 100vh;
       min-width: 680px;
+      background: var(--editor-bg);
     }
 
     .left,
@@ -87,9 +97,9 @@ function renderWebview(webview) {
 
     .left {
       display: grid;
-      grid-template-rows: 34px 34px 1fr;
-      border-right: 1px solid var(--border);
+      grid-template-rows: 34px 38px 1fr;
       background: var(--panel-bg);
+      border-right: 1px solid var(--border-soft);
     }
 
     .right {
@@ -98,144 +108,272 @@ function renderWebview(webview) {
       background: var(--editor-bg);
     }
 
+    .splitter {
+      position: relative;
+      background: var(--border-soft);
+      cursor: col-resize;
+      outline: none;
+    }
+
+    .splitter::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 2px;
+      height: 52px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--muted) 42%, transparent);
+      transform: translate(-50%, -50%);
+      opacity: 0;
+      transition: opacity 0.12s ease, background 0.12s ease;
+    }
+
+    .splitter:hover,
+    .splitter.dragging,
+    .splitter:focus-visible {
+      background: color-mix(in srgb, var(--accent) 36%, var(--border-soft));
+    }
+
+    .splitter:hover::after,
+    .splitter.dragging::after,
+    .splitter:focus-visible::after {
+      opacity: 1;
+      background: var(--accent);
+    }
+
     .toolbar {
       display: flex;
       align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
-      border-bottom: 1px solid var(--border);
+      gap: 2px;
       min-width: 0;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border-soft);
+      background: color-mix(in srgb, var(--panel-bg) 90%, var(--editor-bg) 10%);
     }
 
-    .toolbar .spacer {
+    .toolbar .spacer,
+    .commit-header .spacer {
       flex: 1;
     }
 
     .tool-button {
-      width: 26px;
+      width: 25px;
       height: 24px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       color: var(--muted);
+      font-size: 14px;
       font-weight: 600;
+      line-height: 1;
+    }
+
+    .tool-button:hover:not(:disabled) {
+      color: var(--text);
+    }
+
+    .tool-separator {
+      width: 1px;
+      height: 18px;
+      margin: 0 5px;
+      background: var(--border-soft);
     }
 
     .repo-select {
       min-width: 0;
-      max-width: 210px;
+      max-width: 230px;
+      height: 24px;
       color: var(--text);
       background: var(--input-bg);
       border: 1px solid var(--input-border, transparent);
-      border-radius: 3px;
-      padding: 2px 6px;
+      border-radius: 4px;
+      padding: 1px 7px;
     }
 
-    .changes-banner {
-      margin: 8px 14px;
-      height: 25px;
-      padding: 4px 18px;
+    .changes-header {
       display: flex;
       align-items: center;
-      gap: 10px;
-      border-radius: 4px;
-      color: var(--blue-fg);
-      background: var(--blue);
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
+      min-width: 0;
+      gap: 8px;
+      padding: 0 13px;
+      border-bottom: 1px solid var(--border-soft);
+      background: color-mix(in srgb, var(--panel-bg) 72%, var(--editor-bg) 28%);
     }
 
-    .banner-status {
-      color: color-mix(in srgb, var(--blue-fg) 75%, transparent);
-      font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
-      font-weight: 400;
+    .disclosure {
+      color: var(--muted);
+      font-size: 12px;
+      transform: translateY(-1px);
+    }
+
+    .changes-title {
+      min-width: 0;
       overflow: hidden;
+      color: var(--text);
+      font-weight: 600;
       text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .changes-count {
+      height: 20px;
+      min-width: 22px;
+      padding: 2px 7px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface-soft) 62%, transparent);
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 14px;
+      text-align: center;
+    }
+
+    .changes-summary {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .changes-list {
       overflow: auto;
-      padding: 2px 0 12px;
+      padding: 7px 8px 12px;
     }
 
     .empty {
-      padding: 18px 22px;
+      margin: 8px 4px;
+      padding: 18px 16px;
       color: var(--muted);
+      background: color-mix(in srgb, var(--surface-soft) 45%, transparent);
+      border: 1px solid var(--border-soft);
+      border-radius: 8px;
       line-height: 1.45;
+    }
+
+    .empty-title {
+      color: var(--text);
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+
+    .empty-text {
+      max-width: 420px;
     }
 
     .file-row {
       display: grid;
-      grid-template-columns: 24px 18px minmax(0, 1fr) auto;
+      grid-template-columns: 20px 22px minmax(0, 1fr) auto;
       align-items: center;
-      gap: 6px;
-      min-height: 28px;
-      padding: 3px 12px 3px 14px;
+      gap: 7px;
+      min-height: 34px;
+      padding: 4px 7px;
+      border: 1px solid transparent;
+      border-radius: 6px;
       cursor: default;
     }
 
+    .file-row + .file-row {
+      margin-top: 2px;
+    }
+
     .file-row:hover {
-      background: var(--row-hover);
+      background: var(--surface-hover);
     }
 
     .file-row.selected {
-      color: var(--row-active-fg);
-      background: var(--row-active);
+      color: var(--surface-active-fg);
+      background: var(--surface-active);
+      border-color: color-mix(in srgb, var(--accent) 28%, transparent);
     }
 
     .file-checkbox {
-      width: 15px;
-      height: 15px;
+      width: 14px;
+      height: 14px;
       margin: 0;
       accent-color: var(--blue);
       cursor: pointer;
     }
 
     .status {
-      width: 18px;
-      text-align: center;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 5px;
+      background: color-mix(in srgb, var(--muted) 12%, transparent);
       font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
     }
 
     .status.added,
     .status.copied {
       color: var(--success);
+      background: color-mix(in srgb, var(--success) 14%, transparent);
     }
 
     .status.modified,
     .status.renamed,
     .status.changed {
       color: var(--modified);
+      background: color-mix(in srgb, var(--modified) 14%, transparent);
     }
 
     .status.deleted {
       color: var(--deleted);
+      background: color-mix(in srgb, var(--deleted) 14%, transparent);
     }
 
     .status.untracked {
       color: var(--untracked);
+      background: color-mix(in srgb, var(--untracked) 14%, transparent);
     }
 
     .status.conflict {
       color: var(--danger);
+      background: color-mix(in srgb, var(--danger) 14%, transparent);
+    }
+
+    .file-main {
+      min-width: 0;
+      display: grid;
+      gap: 1px;
     }
 
     .file-name {
       overflow: hidden;
+      color: inherit;
+      font-weight: 500;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
     .file-path {
+      min-height: 14px;
+      overflow: hidden;
       color: var(--muted);
       font-size: 11px;
-      overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 180px;
+    }
+
+    .file-row.selected .file-path {
+      color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
+    }
+
+    .file-meta {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: lowercase;
+      white-space: nowrap;
+    }
+
+    .file-row.selected .file-meta {
+      color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
     }
 
     .commit-header {
@@ -244,7 +382,7 @@ function renderWebview(webview) {
       gap: 9px;
       min-width: 0;
       padding: 8px 14px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border-soft);
       background: var(--editor-bg);
     }
 
@@ -263,13 +401,13 @@ function renderWebview(webview) {
     }
 
     .last-commit {
-      color: var(--vscode-textLink-foreground);
       min-width: 0;
+      max-width: 420px;
       overflow: hidden;
+      padding: 2px 4px;
+      color: var(--vscode-textLink-foreground);
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 420px;
-      padding: 2px 4px;
     }
 
     .header-icon {
@@ -284,15 +422,15 @@ function renderWebview(webview) {
       height: 26px;
       padding: 0 9px;
       color: var(--text);
-      border: 1px solid var(--border);
       background: var(--vscode-button-secondaryBackground, transparent);
+      border: 1px solid var(--border-soft);
     }
 
     .commit-editor-wrap {
       position: relative;
       min-height: 0;
-      padding: 0 14px 14px;
       display: grid;
+      padding: 0 14px 14px;
     }
 
     .commit-message {
@@ -302,15 +440,15 @@ function renderWebview(webview) {
       resize: none;
       color: var(--vscode-input-foreground);
       background: var(--input-bg);
-      border: 1px solid var(--input-border, var(--border));
+      border: 1px solid var(--input-border, var(--border-soft));
       outline: none;
       padding: 10px 12px;
-      line-height: 1.45;
       font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+      line-height: 1.45;
     }
 
     .commit-message:focus {
-      border-color: var(--vscode-focusBorder);
+      border-color: var(--accent);
     }
 
     .busy-overlay {
@@ -350,8 +488,8 @@ function renderWebview(webview) {
       align-items: center;
       gap: 8px;
       padding: 7px 14px;
-      border-top: 1px solid var(--border);
       background: var(--editor-bg);
+      border-top: 1px solid var(--border-soft);
     }
 
     .primary {
@@ -384,10 +522,10 @@ function renderWebview(webview) {
     .footer-status {
       min-width: 0;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
       color: var(--muted);
       margin-left: 8px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .footer-status.error {
@@ -395,9 +533,9 @@ function renderWebview(webview) {
     }
 
     .gear {
-      margin-left: auto;
       width: 28px;
       height: 28px;
+      margin-left: auto;
       color: var(--muted);
       font-size: 16px;
     }
@@ -405,34 +543,43 @@ function renderWebview(webview) {
     @media (max-width: 760px) {
       .shell {
         grid-template-columns: 1fr;
-        grid-template-rows: 44% 56%;
+        grid-template-rows: 44% 6px 56%;
         min-width: 0;
       }
 
       .left {
         border-right: 0;
-        border-bottom: 1px solid var(--border);
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .splitter {
+        cursor: row-resize;
       }
     }
   </style>
 </head>
 <body>
-  <main class="shell">
+  <main id="shell" class="shell">
     <section class="left" aria-label="Changes">
       <div class="toolbar">
-        <button id="refresh" class="tool-button" title="Refresh">↻</button>
-        <button id="unstage-all" class="tool-button" title="Uncheck all changes">−</button>
-        <button id="stage-all" class="tool-button" title="Check all changes">＋</button>
-        <button id="open-selected" class="tool-button" title="Open selected change">◉</button>
+        <button id="refresh" class="tool-button" title="Refresh">&#x21BB;</button>
+        <button id="unstage-all" class="tool-button" title="Uncheck all changes">&minus;</button>
+        <button id="stage-all" class="tool-button" title="Check all changes">+</button>
+        <span class="tool-separator" aria-hidden="true"></span>
+        <button id="open-selected" class="tool-button" title="Open selected change">&#x25CE;</button>
         <span class="spacer"></span>
         <select id="repo-select" class="repo-select" title="Repository"></select>
       </div>
-      <div id="changes-banner" class="changes-banner">
-        <span>Changes</span>
-        <span id="banner-status" class="banner-status">updating...</span>
+      <div class="changes-header">
+        <span class="disclosure" aria-hidden="true">&#x25BE;</span>
+        <span class="changes-title">Changes</span>
+        <span id="changes-count" class="changes-count">0</span>
+        <span id="changes-summary" class="changes-summary">updating...</span>
       </div>
       <div id="changes-list" class="changes-list" role="listbox" aria-label="Changed files"></div>
     </section>
+
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize changes and commit panels" tabindex="0"></div>
 
     <section class="right" aria-label="Commit">
       <div class="commit-header">
@@ -440,9 +587,9 @@ function renderWebview(webview) {
           <input id="amend" type="checkbox">
           <span>Amend</span>
         </label>
-        <button id="last-commit" class="last-commit" title="Last commit">last commit⌄</button>
+        <button id="last-commit" class="last-commit" title="Last commit">last commit&#x2304;</button>
         <span class="spacer"></span>
-        <button id="history" class="header-icon" title="History">◷</button>
+        <button id="history" class="header-icon" title="History">&#x25F7;</button>
         <button id="generate" class="ai-button" title="Generate commit message with VS Code Language Model API">Generate</button>
       </div>
 
@@ -458,7 +605,7 @@ function renderWebview(webview) {
         <button id="commit" class="primary">Commit</button>
         <button id="commit-push" class="secondary">Commit and Push...</button>
         <div id="footer-status" class="footer-status"></div>
-        <button id="settings" class="gear" title="Settings">⚙</button>
+        <button id="settings" class="gear" title="Settings">&#x2699;</button>
       </div>
     </section>
   </main>
@@ -467,6 +614,7 @@ function renderWebview(webview) {
     (function () {
       const vscode = acquireVsCodeApi();
       const elements = {};
+      const persisted = vscode.getState() || {};
       let state = {
         repositories: [],
         changes: [],
@@ -478,6 +626,8 @@ function renderWebview(webview) {
         totalCount: 0
       };
       let selectedPath = '';
+      let leftPaneSize = persisted.leftPaneSize || '40%';
+      let dragStart = null;
 
       window.addEventListener('message', function (event) {
         if (event.data && event.data.type === 'state') {
@@ -488,18 +638,22 @@ function renderWebview(webview) {
 
       document.addEventListener('DOMContentLoaded', function () {
         cacheElements();
+        applyPaneSize();
         bindEvents();
         vscode.postMessage({ type: 'ready' });
       });
 
       function cacheElements() {
         [
+          'shell',
+          'splitter',
           'refresh',
           'unstage-all',
           'stage-all',
           'open-selected',
           'repo-select',
-          'banner-status',
+          'changes-count',
+          'changes-summary',
           'changes-list',
           'amend',
           'last-commit',
@@ -561,6 +715,121 @@ function renderWebview(webview) {
         elements.history.addEventListener('click', function () {
           vscode.postMessage({ type: 'refresh' });
         });
+        elements.splitter.addEventListener('pointerdown', startResize);
+        elements.splitter.addEventListener('keydown', resizeWithKeyboard);
+        window.addEventListener('resize', applyPaneSize);
+      }
+
+      function startResize(event) {
+        event.preventDefault();
+        dragStart = {
+          pointerId: event.pointerId
+        };
+        elements.splitter.classList.add('dragging');
+        document.body.classList.add('resizing');
+        elements.splitter.setPointerCapture(event.pointerId);
+        elements.splitter.addEventListener('pointermove', moveResize);
+        elements.splitter.addEventListener('pointerup', stopResize);
+        elements.splitter.addEventListener('pointercancel', stopResize);
+      }
+
+      function moveResize(event) {
+        if (!dragStart) {
+          return;
+        }
+
+        const rect = elements.shell.getBoundingClientRect();
+        const maxLeft = Math.max(260, rect.width - 366);
+        const next = clamp(event.clientX - rect.left, 260, maxLeft);
+        setLeftPaneSize(next + 'px');
+      }
+
+      function stopResize(event) {
+        if (!dragStart) {
+          return;
+        }
+
+        if (elements.splitter.hasPointerCapture(dragStart.pointerId)) {
+          elements.splitter.releasePointerCapture(dragStart.pointerId);
+        }
+        dragStart = null;
+        elements.splitter.classList.remove('dragging');
+        document.body.classList.remove('resizing');
+        elements.splitter.removeEventListener('pointermove', moveResize);
+        elements.splitter.removeEventListener('pointerup', stopResize);
+        elements.splitter.removeEventListener('pointercancel', stopResize);
+        persistPaneSize();
+      }
+
+      function resizeWithKeyboard(event) {
+        const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+        if (!keys.includes(event.key)) {
+          return;
+        }
+
+        event.preventDefault();
+        const rect = elements.shell.getBoundingClientRect();
+        const current = currentLeftPanePixels(rect);
+        const maxLeft = Math.max(260, rect.width - 366);
+        let next = current;
+
+        if (event.key === 'ArrowLeft') {
+          next = current - 24;
+        } else if (event.key === 'ArrowRight') {
+          next = current + 24;
+        } else if (event.key === 'Home') {
+          next = 260;
+        } else if (event.key === 'End') {
+          next = maxLeft;
+        }
+
+        setLeftPaneSize(clamp(next, 260, maxLeft) + 'px');
+        persistPaneSize();
+      }
+
+      function setLeftPaneSize(value) {
+        leftPaneSize = value;
+        applyPaneSize();
+      }
+
+      function applyPaneSize() {
+        if (!elements.shell) {
+          return;
+        }
+
+        const rect = elements.shell.getBoundingClientRect();
+        let effectiveSize = leftPaneSize;
+
+        if (String(leftPaneSize).endsWith('px') && rect.width > 0) {
+          const maxLeft = Math.max(260, rect.width - 366);
+          effectiveSize = clamp(Number.parseFloat(leftPaneSize), 260, maxLeft) + 'px';
+        }
+
+        elements.shell.style.setProperty('--left-pane-size', effectiveSize);
+      }
+
+      function persistPaneSize() {
+        const nextState = Object.assign({}, vscode.getState() || {}, {
+          leftPaneSize: leftPaneSize
+        });
+        vscode.setState(nextState);
+      }
+
+      function currentLeftPanePixels(shellRect) {
+        const value = String(leftPaneSize);
+        if (value.endsWith('px')) {
+          return Number.parseFloat(value);
+        }
+
+        if (value.endsWith('%')) {
+          return shellRect.width * Number.parseFloat(value) / 100;
+        }
+
+        return shellRect.width * 0.4;
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
       }
 
       function render() {
@@ -585,18 +854,21 @@ function renderWebview(webview) {
       }
 
       function renderChanges() {
-        elements['banner-status'].textContent = state.busy ? 'updating...' : state.statusText;
+        elements['changes-count'].textContent = String(state.totalCount || 0);
+        elements['changes-summary'].textContent = state.busy
+          ? 'updating...'
+          : changeSummary();
         elements['changes-list'].replaceChildren();
 
         const changes = state.changes || [];
         if (!state.selectedRoot) {
-          elements['changes-list'].appendChild(empty('No Git repository found in the current workspace.'));
+          elements['changes-list'].appendChild(empty('No Git repository', 'Open a folder that contains a Git repository.'));
           selectedPath = '';
           return;
         }
 
         if (changes.length === 0) {
-          elements['changes-list'].appendChild(empty('No changes.'));
+          elements['changes-list'].appendChild(empty('No local changes', 'Edit files in this repository. Checked files will be staged automatically.'));
           selectedPath = '';
           return;
         }
@@ -636,18 +908,27 @@ function renderWebview(webview) {
         status.className = 'status ' + (change.kind || 'changed');
         status.textContent = statusLabel(change);
 
+        const main = document.createElement('span');
+        main.className = 'file-main';
+
         const name = document.createElement('span');
         name.className = 'file-name';
         name.textContent = baseName(change.path);
 
         const dir = document.createElement('span');
         dir.className = 'file-path';
-        dir.textContent = directoryName(change.path);
+        dir.textContent = directoryName(change.path) || 'workspace root';
 
+        const meta = document.createElement('span');
+        meta.className = 'file-meta';
+        meta.textContent = change.kind || 'changed';
+
+        main.appendChild(name);
+        main.appendChild(dir);
         row.appendChild(checkbox);
         row.appendChild(status);
-        row.appendChild(name);
-        row.appendChild(dir);
+        row.appendChild(main);
+        row.appendChild(meta);
         row.addEventListener('click', function () {
           selectedPath = change.path;
           renderChanges();
@@ -668,7 +949,7 @@ function renderWebview(webview) {
         }
 
         elements.amend.checked = Boolean(state.amend);
-        elements['last-commit'].textContent = (state.lastCommit || 'last commit') + '⌄';
+        elements['last-commit'].textContent = (state.lastCommit || 'last commit') + '\\u2304';
         elements['busy-overlay'].classList.toggle('visible', Boolean(state.busy));
         elements['busy-text'].textContent = state.busyText || 'Loading...';
 
@@ -685,16 +966,38 @@ function renderWebview(webview) {
         elements['footer-status'].classList.toggle('error', Boolean(state.errorText));
       }
 
-      function empty(text) {
+      function changeSummary() {
+        const total = state.totalCount || 0;
+        const staged = state.stagedCount || 0;
+
+        if (total === 0) {
+          return 'clean';
+        }
+
+        return staged + '/' + total + ' checked';
+      }
+
+      function empty(title, text) {
         const node = document.createElement('div');
         node.className = 'empty';
-        node.textContent = text;
+
+        const titleNode = document.createElement('div');
+        titleNode.className = 'empty-title';
+        titleNode.textContent = title;
+
+        const textNode = document.createElement('div');
+        textNode.className = 'empty-text';
+        textNode.textContent = text;
+
+        node.appendChild(titleNode);
+        node.appendChild(textNode);
+
         return node;
       }
 
       function statusLabel(change) {
         if (change.kind === 'untracked') {
-          return 'U';
+          return '?';
         }
         if (change.kind === 'added') {
           return 'A';
