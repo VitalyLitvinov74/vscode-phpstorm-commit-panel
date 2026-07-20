@@ -305,7 +305,8 @@ function renderWebview(webview) {
 
     .disclosure {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 15px;
+      font-weight: 700;
       transform: translateY(-1px);
     }
 
@@ -367,7 +368,7 @@ function renderWebview(webview) {
 
     .tree-row {
       display: grid;
-      grid-template-columns: 14px 16px minmax(0, 1fr) 30px;
+      grid-template-columns: 18px 16px minmax(0, 1fr) 30px;
       align-items: center;
       gap: 4px;
       min-height: 22px;
@@ -391,14 +392,20 @@ function renderWebview(webview) {
     }
 
     .disclosure-button {
-      width: 14px;
+      width: 18px;
       height: 20px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      color: var(--muted);
-      font-size: 11px;
+      color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
+      font-size: 15px;
+      font-weight: 700;
       line-height: 1;
+    }
+
+    .tree-row:hover .disclosure-button,
+    .tree-row.selected .disclosure-button {
+      color: currentColor;
     }
 
     .file-checkbox,

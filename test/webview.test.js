@@ -12,8 +12,13 @@ function run() {
 
   assert.match(
     html,
-    /grid-template-columns:\s*14px 16px minmax\(0, 1fr\) 30px/,
+    /grid-template-columns:\s*18px 16px minmax\(0, 1fr\) 30px/,
     'changes tree rows must stay compact and single-line'
+  );
+  assert.match(
+    html,
+    /\.disclosure-button\s*\{[\s\S]*?font-size:\s*15px;/,
+    'tree disclosure arrows must stay large enough to read'
   );
   assert.match(
     html,
