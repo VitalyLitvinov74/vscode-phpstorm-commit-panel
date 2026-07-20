@@ -196,6 +196,18 @@ function renderWebview(webview) {
       border-radius: 3px;
     }
 
+    .tool-button svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: 0.92;
+    }
+
     .tool-button:hover:not(:disabled) {
       color: var(--text);
     }
@@ -304,10 +316,22 @@ function renderWebview(webview) {
     }
 
     .disclosure {
-      color: var(--muted);
-      font-size: 15px;
-      font-weight: 700;
-      transform: translateY(-1px);
+      width: 16px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--muted) 88%, var(--text) 12%);
+    }
+
+    .disclosure::before {
+      content: '';
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 5px 4px 0 4px;
+      border-color: currentColor transparent transparent transparent;
+      transform: translateY(1px);
     }
 
     .changes-title {
@@ -398,9 +422,32 @@ function renderWebview(webview) {
       align-items: center;
       justify-content: center;
       color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
-      font-size: 15px;
-      font-weight: 700;
       line-height: 1;
+    }
+
+    .disclosure-button::before {
+      content: '';
+      width: 0;
+      height: 0;
+      border-style: solid;
+      opacity: 0.9;
+    }
+
+    .disclosure-button.collapsed::before {
+      margin-left: 2px;
+      border-width: 4.5px 0 4.5px 6px;
+      border-color: transparent transparent transparent currentColor;
+    }
+
+    .disclosure-button.expanded::before {
+      margin-top: 1px;
+      border-width: 6px 4.5px 0 4.5px;
+      border-color: currentColor transparent transparent transparent;
+    }
+
+    .disclosure-spacer {
+      width: 18px;
+      height: 20px;
     }
 
     .tree-row:hover .disclosure-button,
@@ -733,8 +780,18 @@ function renderWebview(webview) {
         </div>
         <span class="tool-separator" aria-hidden="true"></span>
         <div class="toolbar-group" aria-label="Tree actions">
-          <button id="expand-all" class="tool-button" title="Expand all directories">&#x2304;</button>
-          <button id="collapse-all" class="tool-button" title="Collapse all directories">&#x2303;</button>
+          <button id="expand-all" class="tool-button" title="Expand all directories" aria-label="Expand all directories">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M4.5 5.5 8 9l3.5-3.5"></path>
+              <path d="M4.5 9.5 8 13l3.5-3.5"></path>
+            </svg>
+          </button>
+          <button id="collapse-all" class="tool-button" title="Collapse all directories" aria-label="Collapse all directories">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M4.5 6.5 8 3l3.5 3.5"></path>
+              <path d="M4.5 10.5 8 7l3.5 3.5"></path>
+            </svg>
+          </button>
         </div>
         <span class="spacer"></span>
         <select id="repo-select" class="repo-select" title="Repository"></select>
@@ -754,7 +811,7 @@ function renderWebview(webview) {
         </div>
       </div>
       <div class="changes-header">
-        <span class="disclosure" aria-hidden="true">&#x25BE;</span>
+        <span class="disclosure" aria-hidden="true"></span>
         <span class="changes-title">Changes</span>
         <span id="changes-count" class="changes-count">0</span>
         <span id="changes-summary" class="changes-summary">updating...</span>
@@ -1293,10 +1350,10 @@ function renderWebview(webview) {
         row.title = node.path + '\\n' + node.stagedCount + '/' + node.fileCount + ' checked';
 
         const disclosure = document.createElement('button');
-        disclosure.className = 'disclosure-button';
+        disclosure.className = 'disclosure-button ' + (expanded ? 'expanded' : 'collapsed');
         disclosure.type = 'button';
         disclosure.title = expanded ? 'Collapse folder' : 'Expand folder';
-        disclosure.textContent = expanded ? '\\u25BE' : '\\u25B8';
+        disclosure.setAttribute('aria-label', disclosure.title);
         disclosure.addEventListener('click', function (event) {
           event.stopPropagation();
           toggleFolder(node.path);
@@ -1349,7 +1406,7 @@ function renderWebview(webview) {
         row.dataset.path = change.path;
 
         const spacer = document.createElement('span');
-        spacer.className = 'disclosure-button';
+        spacer.className = 'disclosure-spacer';
         spacer.setAttribute('aria-hidden', 'true');
 
         const checkbox = document.createElement('input');

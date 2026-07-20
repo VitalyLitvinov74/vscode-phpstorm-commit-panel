@@ -17,8 +17,27 @@ function run() {
   );
   assert.match(
     html,
-    /\.disclosure-button\s*\{[\s\S]*?font-size:\s*15px;/,
-    'tree disclosure arrows must stay large enough to read'
+    /\.disclosure-button\.collapsed::before\s*\{[\s\S]*?border-width:\s*4\.5px 0 4\.5px 6px;/,
+    'collapsed tree disclosure arrows must be readable CSS triangles'
+  );
+  assert.match(
+    html,
+    /\.disclosure-button\.expanded::before\s*\{[\s\S]*?border-width:\s*6px 4\.5px 0 4\.5px;/,
+    'expanded tree disclosure arrows must be readable CSS triangles'
+  );
+  assert.match(
+    html,
+    /<button id="expand-all"[\s\S]*?<svg viewBox="0 0 16 16"/,
+    'toolbar expand all control must use an aligned SVG icon'
+  );
+  assert.match(
+    html,
+    /<button id="collapse-all"[\s\S]*?<svg viewBox="0 0 16 16"/,
+    'toolbar collapse all control must use an aligned SVG icon'
+  );
+  assert.ok(
+    !html.includes('\\\\u25BE') && !html.includes('\\\\u25B8') && !html.includes('&#x25BE;'),
+    'changes tree must not render disclosure arrows as font-dependent unicode glyphs'
   );
   assert.match(
     html,
