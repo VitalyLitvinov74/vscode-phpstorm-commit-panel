@@ -33,7 +33,7 @@ function renderWebview(webview) {
       --modified: var(--vscode-gitDecoration-modifiedResourceForeground);
       --deleted: var(--vscode-gitDecoration-deletedResourceForeground);
       --untracked: var(--vscode-gitDecoration-untrackedResourceForeground);
-      --left-pane-width: 520px;
+      --left-pane-width: 42vw;
     }
 
     * {
@@ -97,14 +97,14 @@ function renderWebview(webview) {
 
     .left {
       display: grid;
-      grid-template-rows: 34px 38px 1fr;
+      grid-template-rows: 30px 28px 1fr;
       background: var(--panel-bg);
       border-right: 1px solid var(--border-soft);
     }
 
     .right {
       display: grid;
-      grid-template-rows: 46px 1fr 44px;
+      grid-template-rows: 42px 1fr 42px;
       background: var(--editor-bg);
     }
 
@@ -158,7 +158,7 @@ function renderWebview(webview) {
       align-items: center;
       gap: 2px;
       min-width: 0;
-      padding: 4px 8px;
+      padding: 3px 6px;
       border-bottom: 1px solid var(--border-soft);
       background: color-mix(in srgb, var(--panel-bg) 90%, var(--editor-bg) 10%);
     }
@@ -169,8 +169,8 @@ function renderWebview(webview) {
     }
 
     .tool-button {
-      width: 25px;
-      height: 24px;
+      width: 23px;
+      height: 22px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -194,7 +194,7 @@ function renderWebview(webview) {
     .repo-select {
       min-width: 0;
       max-width: 230px;
-      height: 24px;
+      height: 22px;
       color: var(--text);
       background: var(--input-bg);
       border: 1px solid var(--input-border, transparent);
@@ -206,8 +206,8 @@ function renderWebview(webview) {
       display: flex;
       align-items: center;
       min-width: 0;
-      gap: 8px;
-      padding: 0 13px;
+      gap: 6px;
+      padding: 0 8px;
       border-bottom: 1px solid var(--border-soft);
       background: color-mix(in srgb, var(--panel-bg) 72%, var(--editor-bg) 28%);
     }
@@ -228,9 +228,9 @@ function renderWebview(webview) {
     }
 
     .changes-count {
-      height: 20px;
+      height: 18px;
       min-width: 22px;
-      padding: 2px 7px;
+      padding: 1px 6px;
       color: var(--muted);
       background: color-mix(in srgb, var(--surface-soft) 62%, transparent);
       border: 1px solid var(--border-soft);
@@ -251,16 +251,16 @@ function renderWebview(webview) {
 
     .changes-list {
       overflow: auto;
-      padding: 7px 8px 12px;
+      padding: 2px 4px 8px;
     }
 
     .empty {
-      margin: 8px 4px;
-      padding: 18px 16px;
+      margin: 6px 3px;
+      padding: 10px 11px;
       color: var(--muted);
       background: color-mix(in srgb, var(--surface-soft) 45%, transparent);
       border: 1px solid var(--border-soft);
-      border-radius: 8px;
+      border-radius: 4px;
       line-height: 1.45;
     }
 
@@ -276,18 +276,18 @@ function renderWebview(webview) {
 
     .tree-row {
       display: grid;
-      grid-template-columns: 16px 20px 20px minmax(0, 1fr) auto;
+      grid-template-columns: 14px 16px minmax(0, 1fr) 24px;
       align-items: center;
-      gap: 7px;
-      min-height: 28px;
-      padding: 2px 7px;
+      gap: 4px;
+      min-height: 22px;
+      padding: 0 4px;
       border: 1px solid transparent;
-      border-radius: 4px;
+      border-radius: 2px;
       cursor: default;
     }
 
     .tree-row + .tree-row {
-      margin-top: 1px;
+      margin-top: 0;
     }
 
     .tree-row:hover {
@@ -297,12 +297,11 @@ function renderWebview(webview) {
     .tree-row.selected {
       color: var(--surface-active-fg);
       background: var(--surface-active);
-      border-color: color-mix(in srgb, var(--accent) 28%, transparent);
     }
 
     .disclosure-button {
-      width: 16px;
-      height: 22px;
+      width: 14px;
+      height: 20px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -312,37 +311,31 @@ function renderWebview(webview) {
     }
 
     .file-checkbox {
-      width: 14px;
-      height: 14px;
+      width: 13px;
+      height: 13px;
       margin: 0;
       accent-color: var(--blue);
       cursor: pointer;
     }
 
     .status {
-      width: 20px;
-      height: 20px;
+      width: 24px;
+      height: 18px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: 5px;
-      background: color-mix(in srgb, var(--muted) 12%, transparent);
+      background: transparent;
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px;
       font-weight: 700;
-    }
-
-    .folder-icon {
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1;
+      justify-self: end;
     }
 
     .folder-main {
       min-width: 0;
       overflow: hidden;
       color: inherit;
-      font-weight: 600;
+      font-weight: 500;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -360,35 +353,31 @@ function renderWebview(webview) {
     .status.added,
     .status.copied {
       color: var(--success);
-      background: color-mix(in srgb, var(--success) 14%, transparent);
     }
 
     .status.modified,
     .status.renamed,
     .status.changed {
       color: var(--modified);
-      background: color-mix(in srgb, var(--modified) 14%, transparent);
     }
 
     .status.deleted {
       color: var(--deleted);
-      background: color-mix(in srgb, var(--deleted) 14%, transparent);
     }
 
     .status.untracked {
       color: var(--untracked);
-      background: color-mix(in srgb, var(--untracked) 14%, transparent);
     }
 
     .status.conflict {
       color: var(--danger);
-      background: color-mix(in srgb, var(--danger) 14%, transparent);
     }
 
     .file-main {
       min-width: 0;
-      display: grid;
-      gap: 1px;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
     }
 
     .file-name {
@@ -399,36 +388,12 @@ function renderWebview(webview) {
       white-space: nowrap;
     }
 
-    .file-path {
-      min-height: 14px;
-      overflow: hidden;
-      color: var(--muted);
-      font-size: 11px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .tree-row.selected .file-path {
-      color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
-    }
-
-    .file-meta {
-      color: var(--muted);
-      font-size: 11px;
-      text-transform: lowercase;
-      white-space: nowrap;
-    }
-
-    .tree-row.selected .file-meta {
-      color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
-    }
-
     .commit-header {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 8px;
       min-width: 0;
-      padding: 8px 14px;
+      padding: 7px 12px;
       border-bottom: 1px solid var(--border-soft);
       background: var(--editor-bg);
     }
@@ -477,7 +442,7 @@ function renderWebview(webview) {
       position: relative;
       min-height: 0;
       display: grid;
-      padding: 0 14px 14px;
+      padding: 0 12px 12px;
     }
 
     .commit-message {
@@ -489,7 +454,7 @@ function renderWebview(webview) {
       background: var(--input-bg);
       border: 1px solid var(--input-border, var(--border-soft));
       outline: none;
-      padding: 10px 12px;
+      padding: 8px 10px;
       font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
       line-height: 1.45;
     }
@@ -500,7 +465,7 @@ function renderWebview(webview) {
 
     .busy-overlay {
       position: absolute;
-      inset: 0 14px 14px;
+      inset: 0 12px 12px;
       display: none;
       align-items: center;
       justify-content: center;
@@ -534,7 +499,7 @@ function renderWebview(webview) {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 7px 14px;
+      padding: 6px 12px;
       background: var(--editor-bg);
       border-top: 1px solid var(--border-soft);
     }
@@ -662,6 +627,9 @@ function renderWebview(webview) {
       const vscode = acquireVsCodeApi();
       const elements = {};
       const persisted = vscode.getState() || {};
+      const layoutVersion = 3;
+      const hasPersistedPaneWidth = persisted.layoutVersion === layoutVersion
+        && Number.isFinite(Number(persisted.leftPaneWidth));
       let state = {
         repositories: [],
         changes: [],
@@ -672,13 +640,13 @@ function renderWebview(webview) {
         stagedCount: 0,
         totalCount: 0
       };
-      const minLeftPaneWidth = 260;
+      const minLeftPaneWidth = 280;
       const minRightPaneWidth = 320;
       const splitterWidth = 12;
       let selectedPath = '';
-      let leftPaneWidth = Number.isFinite(Number(persisted.leftPaneWidth))
+      let leftPaneWidth = hasPersistedPaneWidth
         ? Number(persisted.leftPaneWidth)
-        : 520;
+        : 0;
       let collapsedFolders = new Set(Array.isArray(persisted.collapsedFolders)
         ? persisted.collapsedFolders
         : []);
@@ -844,7 +812,7 @@ function renderWebview(webview) {
       }
 
       function resetPaneWidth() {
-        leftPaneWidth = Math.round(elements.shell.getBoundingClientRect().width * 0.5);
+        leftPaneWidth = defaultLeftPaneWidth(elements.shell.getBoundingClientRect());
         applyPaneSize();
         persistUiState();
       }
@@ -861,6 +829,10 @@ function renderWebview(webview) {
 
         const rect = elements.shell.getBoundingClientRect();
         if (rect.width > 0) {
+          if (!leftPaneWidth) {
+            leftPaneWidth = defaultLeftPaneWidth(rect);
+          }
+
           leftPaneWidth = clamp(leftPaneWidth, minLeftPaneWidth, maxLeftPaneWidth(rect));
         }
 
@@ -869,6 +841,7 @@ function renderWebview(webview) {
 
       function persistUiState() {
         const nextState = Object.assign({}, vscode.getState() || {}, {
+          layoutVersion: layoutVersion,
           leftPaneWidth: leftPaneWidth,
           collapsedFolders: Array.from(collapsedFolders)
         });
@@ -881,6 +854,10 @@ function renderWebview(webview) {
 
       function maxLeftPaneWidth(shellRect) {
         return Math.max(minLeftPaneWidth, shellRect.width - minRightPaneWidth - splitterWidth);
+      }
+
+      function defaultLeftPaneWidth(shellRect) {
+        return clamp(Math.round(shellRect.width * 0.42), minLeftPaneWidth, maxLeftPaneWidth(shellRect));
       }
 
       function clamp(value, min, max) {
@@ -1060,16 +1037,14 @@ function renderWebview(webview) {
           event.stopPropagation();
         });
         checkbox.addEventListener('change', function (event) {
+          const paths = collectFilePaths(node);
+          setLocalChecked(paths, event.target.checked);
           vscode.postMessage({
             type: 'toggleChanges',
-            paths: collectFilePaths(node),
+            paths: paths,
             checked: event.target.checked
           });
         });
-
-        const icon = document.createElement('span');
-        icon.className = 'folder-icon';
-        icon.textContent = '\\u25A3';
 
         const name = document.createElement('span');
         name.className = 'folder-main';
@@ -1081,7 +1056,6 @@ function renderWebview(webview) {
 
         row.appendChild(disclosure);
         row.appendChild(checkbox);
-        row.appendChild(icon);
         row.appendChild(name);
         row.appendChild(count);
         row.addEventListener('click', function () {
@@ -1111,6 +1085,7 @@ function renderWebview(webview) {
           event.stopPropagation();
         });
         checkbox.addEventListener('change', function (event) {
+          setLocalChecked([change.path], event.target.checked);
           vscode.postMessage({
             type: 'toggleChange',
             path: change.path,
@@ -1129,21 +1104,11 @@ function renderWebview(webview) {
         name.className = 'file-name';
         name.textContent = baseName(change.path);
 
-        const dir = document.createElement('span');
-        dir.className = 'file-path';
-        dir.textContent = directoryName(change.path) || 'workspace root';
-
-        const meta = document.createElement('span');
-        meta.className = 'file-meta';
-        meta.textContent = change.kind || 'changed';
-
         main.appendChild(name);
-        main.appendChild(dir);
         row.appendChild(spacer);
         row.appendChild(checkbox);
-        row.appendChild(status);
         row.appendChild(main);
-        row.appendChild(meta);
+        row.appendChild(status);
         row.addEventListener('click', function () {
           selectedPath = change.path;
           renderChanges();
@@ -1178,8 +1143,34 @@ function renderWebview(webview) {
         return node.children.flatMap(collectFilePaths);
       }
 
+      function setLocalChecked(paths, checked) {
+        const pathSet = new Set(paths);
+        const changes = (state.changes || []).map(function (change) {
+          if (!pathSet.has(change.path)) {
+            return change;
+          }
+
+          return Object.assign({}, change, {
+            staged: checked
+          });
+        });
+        const stagedCount = changes.filter(function (change) { return change.staged; }).length;
+
+        state = Object.assign({}, state, {
+          changes: changes,
+          stagedCount: stagedCount,
+          totalCount: changes.length,
+          canGenerate: stagedCount > 0,
+          statusText: changeSummaryFromCounts(stagedCount, changes.length),
+          errorText: ''
+        });
+
+        renderChanges();
+        renderCommitPanel();
+      }
+
       function treePadding(depth) {
-        return 7 + depth * 18 + 'px';
+        return 4 + depth * 14 + 'px';
       }
 
       function renderCommitPanel() {
@@ -1212,6 +1203,14 @@ function renderWebview(webview) {
         const total = state.totalCount || 0;
         const staged = state.stagedCount || 0;
 
+        if (total === 0) {
+          return 'clean';
+        }
+
+        return changeSummaryFromCounts(staged, total);
+      }
+
+      function changeSummaryFromCounts(staged, total) {
         if (total === 0) {
           return 'clean';
         }
@@ -1264,11 +1263,6 @@ function renderWebview(webview) {
         return parts[parts.length - 1] || filePath;
       }
 
-      function directoryName(filePath) {
-        const parts = String(filePath || '').split('/');
-        parts.pop();
-        return parts.join('/');
-      }
     }());
   </script>
 </body>

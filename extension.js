@@ -12,6 +12,8 @@ class PhpStormCommitPanelProvider {
   constructor(context) {
     this.context = context;
     this.operation = Promise.resolve();
+    this.pendingRefreshTimer = undefined;
+    this.pendingStagingOperations = 0;
     this.refreshing = false;
     this.view = undefined;
     this.state = {
@@ -30,6 +32,10 @@ class PhpStormCommitPanelProvider {
       totalCount: 0,
       canGenerate: false
     };
+
+    this.context.subscriptions.push({
+      dispose: () => this.clearScheduledRefresh()
+    });
   }
 
   resolveWebviewView(webviewView) {
@@ -58,11 +64,11 @@ class PhpStormCommitPanelProvider {
         await this.refresh();
         return;
       case 'refresh':
-        await this.refresh();
+        await this.refresh({ force: true });
         return;
       case 'selectRepository':
         this.state.selectedRoot = message.root;
-        await this.refresh();
+        await this.refresh({ force: true });
         return;
       case 'setMessage':
         this.state.message = String(message.message ?? '');
@@ -107,9 +113,18 @@ class PhpStormCommitPanelProvider {
     }
   }
 
-  async refresh() {
+  async refresh(options = {}) {
+    if (this.pendingStagingOperations > 0 && !options.force) {
+      this.scheduleRefresh(700);
+      return;
+    }
+
     if (this.refreshing) {
       return;
+    }
+
+    if (options.force) {
+      this.clearScheduledRefresh();
     }
 
     this.refreshing = true;
@@ -242,11 +257,67 @@ class PhpStormCommitPanelProvider {
       return;
     }
 
-    await this.enqueueOperation('Updating Git index...', async () => {
-      if (checked) {
-        await git.stagePaths(this.state.selectedRoot, paths);
-      } else {
-        await git.unstagePaths(this.state.selectedRoot, paths);
+    this.applyOptimisticStaging(paths, checked);
+    this.enqueueStagingOperation(this.state.selectedRoot, paths, checked);
+  }
+
+  applyOptimisticStaging(paths, checked) {
+    const pathSet = new Set(paths);
+    let changed = false;
+    const changes = this.state.changes.map((change) => {
+      if (!pathSet.has(change.path) || change.staged === checked) {
+        return change;
+      }
+
+      changed = true;
+      return {
+        ...change,
+        staged: checked
+      };
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    const stagedCount = changes.filter((change) => change.staged).length;
+    const totalCount = changes.length;
+    this.state = {
+      ...this.state,
+      changes,
+      stagedCount,
+      totalCount,
+      canGenerate: stagedCount > 0,
+      statusText: formatStatusText(stagedCount, totalCount),
+      errorText: ''
+    };
+    this.postState();
+  }
+
+  enqueueStagingOperation(root, paths, checked) {
+    this.pendingStagingOperations += 1;
+    this.operation = this.operation.catch(() => {}).then(async () => {
+      try {
+        if (checked) {
+          await git.stagePaths(root, paths);
+        } else {
+          await git.unstagePaths(root, paths);
+        }
+
+        this.state = {
+          ...this.state,
+          errorText: ''
+        };
+      } catch (error) {
+        this.state = {
+          ...this.state,
+          errorText: formatError(error)
+        };
+        vscode.window.showErrorMessage(this.state.errorText);
+      } finally {
+        this.pendingStagingOperations = Math.max(0, this.pendingStagingOperations - 1);
+        this.scheduleRefresh(this.state.errorText ? 0 : 650);
+        this.postState();
       }
     });
   }
@@ -313,12 +384,11 @@ class PhpStormCommitPanelProvider {
       return;
     }
 
-    if (!this.state.amend && !await git.hasStagedChanges(root)) {
-      vscode.window.showWarningMessage('No checked changes to commit.');
-      return;
-    }
-
     await this.enqueueOperation(pushAfterCommit ? 'Committing and pushing...' : 'Committing...', async () => {
+      if (!this.state.amend && !await git.hasStagedChanges(root)) {
+        throw new Error('No checked changes to commit.');
+      }
+
       await git.commit(root, message, { amend: this.state.amend });
 
       if (pushAfterCommit) {
@@ -399,8 +469,9 @@ class PhpStormCommitPanelProvider {
 
   async enqueueOperation(label, operation, options = {}) {
     const refreshAfter = options.refreshAfter !== false;
+    this.clearScheduledRefresh();
 
-    this.operation = this.operation.then(async () => {
+    this.operation = this.operation.catch(() => {}).then(async () => {
       this.state = {
         ...this.state,
         busy: true,
@@ -431,6 +502,23 @@ class PhpStormCommitPanelProvider {
     });
 
     await this.operation;
+  }
+
+  scheduleRefresh(delayMs) {
+    this.clearScheduledRefresh();
+    this.pendingRefreshTimer = setTimeout(() => {
+      this.pendingRefreshTimer = undefined;
+      this.refresh();
+    }, delayMs);
+  }
+
+  clearScheduledRefresh() {
+    if (!this.pendingRefreshTimer) {
+      return;
+    }
+
+    clearTimeout(this.pendingRefreshTimer);
+    this.pendingRefreshTimer = undefined;
   }
 
   postState() {

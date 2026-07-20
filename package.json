@@ -2,7 +2,7 @@
   "name": "phpstorm-git-panel",
   "displayName": "PhpStorm Commit Panel for VS Code",
   "description": "JetBrains PhpStorm-style Git commit panel for Visual Studio Code with staged checkboxes, split commit UI, amend, push, and AI commit message generation.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "vetal",
   "homepage": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel#readme",
   "repository": {
@@ -46,6 +46,9 @@
     "onCommand:phpstormGitPanel.commitAndPush"
   ],
   "main": "./extension.js",
+  "scripts": {
+    "test": "node test/git.test.js && node test/webview.test.js"
+  },
   "contributes": {
     "commands": [
       {
