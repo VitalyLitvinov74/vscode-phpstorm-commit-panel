@@ -476,8 +476,13 @@ function renderWebview(webview) {
       stroke-linejoin: round;
     }
 
+    .entry-icon svg.filled-icon {
+      fill: currentColor;
+      stroke: none;
+    }
+
     .folder-icon {
-      color: var(--vscode-symbolIcon-folderForeground, #dcb67a);
+      color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
     }
 
     .file-icon {
@@ -509,6 +514,41 @@ function renderWebview(webview) {
 
     .file-icon-md {
       color: #6caee8;
+    }
+
+    .file-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 15px;
+      height: 14px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.7px;
+    }
+
+    .file-icon-csharp .file-badge {
+      color: #89d185;
+    }
+
+    .file-icon-md .file-badge {
+      color: #6caee8;
+      font-size: 10px;
+      letter-spacing: -0.9px;
+    }
+
+    .file-icon-env svg {
+      color: #75beff;
+      stroke-width: 1.35;
+    }
+
+    .file-icon-yaml .file-badge,
+    .file-icon-json .file-badge {
+      color: #d7ba7d;
+      font-size: 8px;
+      letter-spacing: -0.8px;
     }
 
     .file-checkbox,
@@ -1714,10 +1754,8 @@ function renderWebview(webview) {
         icon.setAttribute('aria-hidden', 'true');
 
         const svg = createSvg();
-        const back = createSvgPath('M1.7 5.1h4l1.1 1.3h7.5v1.2H1.7z');
-        const front = createSvgPath('M1.7 6.4h12.6l-.8 6.1H2.5z');
-        back.setAttribute('opacity', '0.45');
-        front.setAttribute('opacity', '0.92');
+        const back = createSvgPath('M1.9 5.3h4.4l1.2 1.4h6.6');
+        const front = createSvgPath('M2 6.8h12v6H2z');
         svg.appendChild(back);
         svg.appendChild(front);
         icon.appendChild(svg);
@@ -1731,12 +1769,72 @@ function renderWebview(webview) {
         icon.className = 'entry-icon file-icon file-icon-' + kind;
         icon.setAttribute('aria-hidden', 'true');
 
+        if (kind === 'docker') {
+          appendDockerIcon(icon);
+          return icon;
+        }
+
+        if (kind === 'csharp') {
+          icon.appendChild(createFileBadge('C#'));
+          return icon;
+        }
+
+        if (kind === 'md') {
+          icon.appendChild(createFileBadge('M↓'));
+          return icon;
+        }
+
+        if (kind === 'env') {
+          appendEnvIcon(icon);
+          return icon;
+        }
+
+        if (kind === 'yaml') {
+          icon.appendChild(createFileBadge('Y'));
+          return icon;
+        }
+
+        if (kind === 'json') {
+          icon.appendChild(createFileBadge('{}'));
+          return icon;
+        }
+
+        appendDocumentIcon(icon);
+
+        return icon;
+      }
+
+      function appendDocumentIcon(icon) {
         const svg = createSvg();
         svg.appendChild(createSvgPath('M4 2.5h5.2L12 5.3v8.2H4z'));
         svg.appendChild(createSvgPath('M9 2.5v3h3'));
         icon.appendChild(svg);
+      }
 
-        return icon;
+      function appendDockerIcon(icon) {
+        const svg = createSvg();
+        svg.classList.add('filled-icon');
+        svg.appendChild(createSvgPath('M2.1 9.6h8.7c-.2 1.7-1.7 3.1-4.1 3.1H4.9c-1.7 0-2.8-.9-2.8-2.4v-.7z'));
+        svg.appendChild(createSvgPath('M11.1 9.5c.8-.1 1.5-.6 1.9-1.3.4.6 1 1 1.8 1.1-.7.4-1.4.5-2.1.4-.5.4-1 .7-1.7.8l.1-1z'));
+        svg.appendChild(createSvgPath('M3.2 6.6h1.7v1.5H3.2zM5.2 6.6h1.7v1.5H5.2zM7.2 6.6h1.7v1.5H7.2zM5.2 4.8h1.7v1.5H5.2zM7.2 4.8h1.7v1.5H7.2zM9.2 6.6h1.7v1.5H9.2z'));
+        icon.appendChild(svg);
+      }
+
+      function appendEnvIcon(icon) {
+        const svg = createSvg();
+        svg.appendChild(createSvgPath('M3.8 2.5h5.4L12 5.3v8.2H3.8z'));
+        svg.appendChild(createSvgPath('M9 2.6v3h3'));
+        svg.appendChild(createSvgPath('M7.7 8.1a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z'));
+        svg.appendChild(createSvgPath('M7.7 6.9v.7M7.7 11.8v.7M5.7 7.7l.5.5M9.2 11.2l.5.5M4.9 9.7h.7M9.8 9.7h.7M5.7 11.7l.5-.5M9.2 8.2l.5-.5'));
+        icon.appendChild(svg);
+      }
+
+      function createFileBadge(text) {
+        const badge = document.createElement('span');
+        badge.className = 'file-badge';
+        badge.textContent = text;
+
+        return badge;
       }
 
       function createSvg() {

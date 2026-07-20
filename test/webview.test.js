@@ -32,6 +32,26 @@ function run() {
   );
   assert.match(
     html,
+    /function appendDockerIcon\(icon\)/,
+    'Dockerfile rows must render a Docker-specific icon instead of a generic document'
+  );
+  assert.match(
+    html,
+    /createFileBadge\('C#'\)/,
+    'C# rows must render the Explorer-like C# badge icon'
+  );
+  assert.match(
+    html,
+    /function appendEnvIcon\(icon\)/,
+    'env files must render a settings-style icon instead of a generic document'
+  );
+  assert.match(
+    html,
+    /\.folder-icon\s*\{[\s\S]*?color:\s*color-mix\(in srgb, var\(--muted\) 86%, var\(--text\) 14%\);/,
+    'folder icons must use the muted Explorer-like outline color'
+  );
+  assert.match(
+    html,
     /\.disclosure-button\.collapsed::before\s*\{[\s\S]*?border-width:\s*4\.5px 0 4\.5px 6px;/,
     'collapsed tree disclosure arrows must be readable CSS triangles'
   );
