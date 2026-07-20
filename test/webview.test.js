@@ -275,6 +275,11 @@ function run() {
     ['workspace'],
     'Git panel must run in the workspace/remote extension host so WSL repositories use WSL git'
   );
+  assert.equal(
+    manifest.contributes.views.phpstormGitPanel[0].when,
+    undefined,
+    'Activity Bar panel must stay visible in WSL even before a workspace folder is opened'
+  );
 }
 
 run();
