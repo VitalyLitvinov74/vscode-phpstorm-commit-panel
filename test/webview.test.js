@@ -25,6 +25,17 @@ function run() {
     /const layoutVersion = 3;/,
     'layout version must reset old persisted pane widths'
   );
+  assert.match(
+    html,
+    /--checkbox-checked-bg:/,
+    'checkboxes must use a subdued theme-aware checkbox palette'
+  );
+  assert.match(
+    html,
+    /appearance:\s*none;/,
+    'checkboxes must use the custom subdued checkbox style instead of the bright native accent'
+  );
+  assert.ok(!html.includes('accent-color: var(--blue);'), 'checkboxes must not use bright button blue');
   assert.ok(!html.includes('file-meta'), 'old wide file metadata column must not return');
   assert.ok(!html.includes('folder-icon'), 'old extra folder icon column must not return');
 

@@ -28,6 +28,11 @@ function renderWebview(webview) {
       --blue-hover: var(--vscode-button-hoverBackground);
       --input-bg: var(--vscode-input-background);
       --input-border: var(--vscode-input-border);
+      --checkbox-bg: var(--vscode-checkbox-background, var(--input-bg));
+      --checkbox-border: var(--vscode-checkbox-border, color-mix(in srgb, var(--muted) 58%, transparent));
+      --checkbox-checked-bg: color-mix(in srgb, var(--vscode-checkbox-selectBackground, var(--accent)) 42%, var(--checkbox-bg) 58%);
+      --checkbox-checked-border: color-mix(in srgb, var(--vscode-checkbox-selectBorder, var(--accent)) 50%, var(--checkbox-border) 50%);
+      --checkbox-mark: var(--vscode-checkbox-selectForeground, var(--vscode-checkbox-foreground, var(--text)));
       --danger: var(--vscode-errorForeground);
       --success: var(--vscode-gitDecoration-addedResourceForeground);
       --modified: var(--vscode-gitDecoration-modifiedResourceForeground);
@@ -310,12 +315,62 @@ function renderWebview(webview) {
       line-height: 1;
     }
 
-    .file-checkbox {
+    .file-checkbox,
+    .amend-label input {
+      appearance: none;
+      display: inline-grid;
+      place-content: center;
       width: 13px;
       height: 13px;
       margin: 0;
-      accent-color: var(--blue);
+      background: var(--checkbox-bg);
+      border: 1px solid var(--checkbox-border);
+      border-radius: 2px;
       cursor: pointer;
+    }
+
+    .file-checkbox::before,
+    .amend-label input::before {
+      content: '';
+      width: 7px;
+      height: 4px;
+      border-left: 2px solid var(--checkbox-mark);
+      border-bottom: 2px solid var(--checkbox-mark);
+      opacity: 0;
+      transform: rotate(-45deg) translate(0, -1px);
+    }
+
+    .file-checkbox:checked,
+    .amend-label input:checked,
+    .file-checkbox:indeterminate {
+      background: var(--checkbox-checked-bg);
+      border-color: var(--checkbox-checked-border);
+    }
+
+    .file-checkbox:checked::before,
+    .amend-label input:checked::before {
+      opacity: 0.86;
+    }
+
+    .file-checkbox:indeterminate::before {
+      width: 7px;
+      height: 0;
+      border-left: 0;
+      border-bottom: 2px solid var(--checkbox-mark);
+      opacity: 0.86;
+      transform: none;
+    }
+
+    .file-checkbox:focus-visible,
+    .amend-label input:focus-visible {
+      outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+      outline-offset: 1px;
+    }
+
+    .file-checkbox:disabled,
+    .amend-label input:disabled {
+      cursor: default;
+      opacity: 0.45;
     }
 
     .status {
@@ -406,10 +461,8 @@ function renderWebview(webview) {
     }
 
     .amend-label input {
-      width: 15px;
-      height: 15px;
-      margin: 0;
-      accent-color: var(--blue);
+      width: 14px;
+      height: 14px;
     }
 
     .last-commit {
