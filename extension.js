@@ -3,12 +3,14 @@
 const path = require('path');
 const vscode = require('vscode');
 const git = require('./src/git');
+const { StagingBatch } = require('./src/stagingBatch');
 const { renderWebview, resolveActiveFileIconTheme } = require('./src/webview');
 
 const VIEW_ID = 'phpstormGitPanel.changes';
 const VIRTUAL_SCHEME = 'phpstorm-git-panel';
 const COMMIT_LANGUAGE_STORAGE_KEY = 'commitLanguage';
 const COMMIT_LANGUAGE_OPTIONS = new Set(['auto', 'en', 'ru']);
+const DIFF_IGNORE_POLICIES = new Set(['none', 'trim', 'all', 'all-and-empty', 'formatting']);
 const DISABLED_SOUND_SETTINGS = [
   ['accessibility.signalOptions.volume', 0],
   ['accessibility.signals.sound', 'never'],
@@ -56,8 +58,13 @@ class PhpStormCommitPanelProvider {
     this.context = context;
     this.operation = Promise.resolve();
     this.pendingRefreshTimer = undefined;
+    this.stagingFlushTimer = undefined;
+    this.stagingBatch = new StagingBatch();
     this.pendingStagingOperations = 0;
+    this.stagingErrorText = '';
+    this.stagingStateVersion = 0;
     this.refreshing = false;
+    this.diffRequestId = 0;
     this.view = undefined;
     const commitLanguage = normalizeCommitLanguage(
       this.context.globalState.get(COMMIT_LANGUAGE_STORAGE_KEY, 'auto')
@@ -68,6 +75,14 @@ class PhpStormCommitPanelProvider {
       selectedRoot: undefined,
       repoName: '',
       changes: [],
+      ignoredFiles: [],
+      showIgnored: false,
+      diffPreviewEnabled: false,
+      selectedPath: '',
+      diffPreview: undefined,
+      diffLoading: false,
+      diffIgnorePolicy: 'none',
+      showBlame: false,
       message: '',
       amend: false,
       lastCommit: '',
@@ -76,6 +91,7 @@ class PhpStormCommitPanelProvider {
       busyText: '',
       statusText: 'Open a folder with a Git repository.',
       errorText: '',
+      confirmedStagingRequestIds: [],
       stagedCount: 0,
       totalCount: 0,
       canGenerate: false
@@ -83,13 +99,15 @@ class PhpStormCommitPanelProvider {
 
     this.context.subscriptions.push(
       {
-        dispose: () => this.clearScheduledRefresh()
+        dispose: () => {
+          this.clearScheduledRefresh();
+          this.clearStagingFlushTimer();
+        }
       },
       vscode.workspace.onDidChangeConfiguration(
         (event) => {
           if (event.affectsConfiguration('workbench.iconTheme')) {
             this.renderPanelWebview();
-            this.refresh();
           }
         }
       )
@@ -108,8 +126,6 @@ class PhpStormCommitPanelProvider {
         }
       })
     );
-
-    this.refresh();
   }
 
   renderPanelWebview() {
@@ -128,12 +144,13 @@ class PhpStormCommitPanelProvider {
       enableScripts: true,
       localResourceRoots
     };
-    this.view.webview.html = renderWebview(this.view.webview, fileIconTheme);
+    this.view.webview.html = renderWebview(this.view.webview, fileIconTheme, this.context.extensionUri);
   }
 
   async handleMessage(message) {
     switch (message?.type) {
       case 'ready':
+        this.restoreWebviewUiState(message.ui);
         await this.refresh();
         return;
       case 'refresh':
@@ -141,7 +158,28 @@ class PhpStormCommitPanelProvider {
         return;
       case 'selectRepository':
         this.state.selectedRoot = message.root;
+        this.state.selectedPath = '';
+        this.state.diffPreview = undefined;
         await this.refresh({ force: true });
+        return;
+      case 'setShowIgnored':
+        this.state.showIgnored = Boolean(message.showIgnored);
+        await this.refresh({ force: true });
+        return;
+      case 'setDiffPreviewEnabled':
+        await this.setDiffPreviewEnabled(Boolean(message.enabled));
+        return;
+      case 'setDiffOptions':
+        await this.setDiffOptions(message.ignorePolicy);
+        return;
+      case 'setDiffBlame':
+        await this.setDiffBlame(Boolean(message.enabled));
+        return;
+      case 'selectChange':
+        await this.selectChange(String(message.path ?? ''));
+        return;
+      case 'toggleHunk':
+        await this.toggleHunk(String(message.path ?? ''), String(message.hunkId ?? ''), Boolean(message.checked));
         return;
       case 'setMessage':
         this.state.message = String(message.message ?? '');
@@ -160,6 +198,9 @@ class PhpStormCommitPanelProvider {
       case 'toggleChanges':
         await this.toggleChanges(message.paths, Boolean(message.checked));
         return;
+      case 'applyStagingBatch':
+        await this.applyStagingBatch(message.changes, String(message.requestId ?? ''));
+        return;
       case 'stageAll':
         await this.stageAll();
         return;
@@ -171,6 +212,15 @@ class PhpStormCommitPanelProvider {
         return;
       case 'openFile':
         await this.openFileByPath(String(message.path ?? ''));
+        return;
+      case 'locateActiveFile':
+        await this.locateActiveFile();
+        return;
+      case 'rollbackChange':
+        await this.rollbackChange(String(message.path ?? ''));
+        return;
+      case 'shelveChange':
+        await this.shelveChange(String(message.path ?? ''));
         return;
       case 'generateCommitMessage':
         await this.generateCommitMessage();
@@ -190,8 +240,8 @@ class PhpStormCommitPanelProvider {
   }
 
   async refresh(options = {}) {
-    if (this.pendingStagingOperations > 0 && !options.force) {
-      this.scheduleRefresh(700);
+    if (this.hasPendingStagingWork() && !options.force) {
+      this.scheduleRefresh(700, options);
       return;
     }
 
@@ -199,14 +249,23 @@ class PhpStormCommitPanelProvider {
       return;
     }
 
+    const stagingStateVersion = this.stagingStateVersion;
+
     if (options.force) {
       this.clearScheduledRefresh();
+
+      if (typeof options.preserveErrorText !== 'string') {
+        this.stagingErrorText = '';
+      }
     }
 
+    const preservedErrorText = typeof options.preserveErrorText === 'string'
+      ? options.preserveErrorText
+      : this.stagingErrorText;
     this.refreshing = true;
     this.state = {
       ...this.state,
-      errorText: '',
+      errorText: preservedErrorText,
       statusText: this.state.busy ? this.state.statusText : 'Changes updating...'
     };
     this.postState();
@@ -226,6 +285,9 @@ class PhpStormCommitPanelProvider {
           selectedRoot: undefined,
           repoName: '',
           changes: [],
+          ignoredFiles: [],
+          selectedPath: '',
+          diffPreview: undefined,
           lastCommit: '',
           statusText: 'Open a folder with a Git repository.',
           stagedCount: 0,
@@ -235,10 +297,16 @@ class PhpStormCommitPanelProvider {
         return;
       }
 
-      const [changes, lastCommit] = await Promise.all([
+      const [changes, lastCommit, ignoredFiles] = await Promise.all([
         git.getStatus(selectedRoot),
-        git.getLastCommitSummary(selectedRoot)
+        git.getLastCommitSummary(selectedRoot),
+        this.state.showIgnored ? git.listIgnoredFiles(selectedRoot) : Promise.resolve([])
       ]);
+
+      if (stagingStateVersion !== this.stagingStateVersion) {
+        return;
+      }
+
       const stagedCount = changes.filter((change) => change.staged).length;
       const totalCount = changes.length;
 
@@ -248,12 +316,23 @@ class PhpStormCommitPanelProvider {
         selectedRoot,
         repoName: path.basename(selectedRoot),
         changes,
+        ignoredFiles,
         lastCommit,
         statusText: formatStatusText(stagedCount, totalCount),
         stagedCount,
         totalCount,
         canGenerate: stagedCount > 0
       };
+
+      if (this.state.diffPreviewEnabled) {
+        const selectedStillExists = changes.some((change) => change.path === this.state.selectedPath);
+        this.state.selectedPath = selectedStillExists
+          ? this.state.selectedPath
+          : changes[0]?.path || '';
+        await this.loadDiffPreview({ post: false });
+      } else {
+        this.state.diffPreview = undefined;
+      }
     } catch (error) {
       this.reportPanelError(error, 'Git status failed');
     } finally {
@@ -310,6 +389,213 @@ class PhpStormCommitPanelProvider {
     return roots[0];
   }
 
+  restoreWebviewUiState(ui) {
+    if (!ui || typeof ui !== 'object') {
+      return;
+    }
+
+    this.state.showIgnored = Boolean(ui.showIgnored);
+    this.state.diffPreviewEnabled = Boolean(ui.diffPreviewEnabled);
+    this.state.selectedPath = typeof ui.selectedPath === 'string' ? ui.selectedPath : '';
+
+    if (DIFF_IGNORE_POLICIES.has(ui.diffIgnorePolicy)) {
+      this.state.diffIgnorePolicy = ui.diffIgnorePolicy;
+    }
+
+    this.state.showBlame = Boolean(ui.showBlame);
+  }
+
+  async setDiffPreviewEnabled(enabled) {
+    this.state.diffPreviewEnabled = enabled;
+
+    if (!enabled) {
+      this.diffRequestId += 1;
+      this.state.diffLoading = false;
+      this.state.diffPreview = undefined;
+      this.postState();
+      return;
+    }
+
+    if (!this.findChange(this.state.selectedPath)) {
+      this.state.selectedPath = this.state.changes[0]?.path || '';
+    }
+
+    await this.loadDiffPreview();
+  }
+
+  async setDiffOptions(ignorePolicy) {
+    const normalizedPolicy = DIFF_IGNORE_POLICIES.has(ignorePolicy) ? ignorePolicy : 'none';
+
+    if (this.state.diffIgnorePolicy === normalizedPolicy) {
+      return;
+    }
+
+    this.state.diffIgnorePolicy = normalizedPolicy;
+
+    if (this.state.diffPreviewEnabled) {
+      await this.loadDiffPreview();
+    } else {
+      this.postState();
+    }
+  }
+
+  async setDiffBlame(enabled) {
+    this.state.showBlame = enabled;
+
+    if (this.state.diffPreviewEnabled) {
+      await this.loadDiffPreview();
+    } else {
+      this.postState();
+    }
+  }
+
+  async selectChange(relativePath) {
+    const change = this.findChange(relativePath);
+
+    if (!change) {
+      return;
+    }
+
+    this.state.selectedPath = change.path;
+
+    if (this.state.diffPreviewEnabled) {
+      await this.loadDiffPreview();
+    } else {
+      this.postState();
+    }
+  }
+
+  async loadDiffPreview(options = {}) {
+    const requestId = ++this.diffRequestId;
+    const root = this.state.selectedRoot;
+    const change = this.findChange(this.state.selectedPath);
+
+    if (!this.state.diffPreviewEnabled || !root || !change) {
+      this.state.diffLoading = false;
+      this.state.diffPreview = undefined;
+
+      if (options.post !== false) {
+        this.postState();
+      }
+      return;
+    }
+
+    const requestedPath = change.path;
+    this.state.diffLoading = true;
+
+    if (options.post !== false) {
+      this.postState();
+    }
+
+    try {
+      const [preview, blame] = await Promise.all([
+        git.getFileDiff(root, change, {
+          contextLines: 3,
+          ignorePolicy: this.state.diffIgnorePolicy
+        }),
+        this.state.showBlame ? git.getBlame(root, change.path) : Promise.resolve({})
+      ]);
+      preview.blame = blame;
+
+      if (this.diffRequestId === requestId
+        && this.state.diffPreviewEnabled
+        && this.state.selectedRoot === root
+        && this.state.selectedPath === requestedPath) {
+        this.state.diffPreview = preview;
+      }
+    } catch (error) {
+      if (this.diffRequestId === requestId
+        && this.state.diffPreviewEnabled
+        && this.state.selectedRoot === root
+        && this.state.selectedPath === requestedPath) {
+        this.state.diffPreview = {
+          path: requestedPath,
+          hunks: [],
+          differenceCount: 0,
+          includedCount: 0,
+          canToggleFile: true,
+          canToggleHunks: false,
+          message: formatError(error)
+        };
+      }
+    } finally {
+      if (this.diffRequestId === requestId
+        && this.state.diffPreviewEnabled
+        && this.state.selectedRoot === root
+        && this.state.selectedPath === requestedPath) {
+        this.state.diffLoading = false;
+      }
+
+      if (options.post !== false) {
+        this.postState();
+      }
+    }
+  }
+
+  async toggleHunk(relativePath, hunkId, checked) {
+    const root = this.state.selectedRoot;
+    const change = this.findChange(relativePath);
+
+    if (!root || !change || !hunkId) {
+      return;
+    }
+
+    await this.enqueueOperation('Updating included changes...', async () => {
+      await git.setHunkIncluded(root, change, hunkId, checked, {
+        contextLines: 3,
+        ignorePolicy: this.state.diffIgnorePolicy
+      });
+    });
+  }
+
+  async locateActiveFile() {
+    const root = this.state.selectedRoot;
+    const activeEditor = vscode.window.activeTextEditor;
+
+    if (!root || !activeEditor || activeEditor.document.uri.scheme !== 'file') {
+      this.reportPanelWarning('Open a changed file to locate it in the panel.');
+      return;
+    }
+
+    const relativePath = path.relative(root, activeEditor.document.uri.fsPath).replace(/\\/g, '/');
+    const outsideRepository = relativePath === '..'
+      || relativePath.startsWith('../')
+      || path.isAbsolute(relativePath);
+
+    if (outsideRepository || !this.findChange(relativePath)) {
+      this.reportPanelWarning('The active file has no local changes in this repository.');
+      return;
+    }
+
+    await this.selectChange(relativePath);
+  }
+
+  async rollbackChange(relativePath) {
+    const root = this.state.selectedRoot;
+    const change = this.findChange(relativePath);
+
+    if (!root || !change) {
+      return;
+    }
+
+    await this.enqueueOperation('Rolling back selected change...', async () => {
+      await git.rollbackPath(root, change);
+    });
+  }
+
+  async shelveChange(relativePath) {
+    const root = this.state.selectedRoot;
+    const change = this.findChange(relativePath);
+
+    if (!root || !change) {
+      return;
+    }
+
+    await this.enqueueOperation('Shelving selected change...', async () => {
+      await git.shelvePath(root, change);
+    });
+  }
+
   async toggleChange(relativePath, checked) {
     await this.toggleChanges([relativePath], checked);
   }
@@ -328,22 +614,67 @@ class PhpStormCommitPanelProvider {
       return;
     }
 
-    this.applyOptimisticStaging(paths, checked);
-    this.enqueueStagingOperation(this.state.selectedRoot, paths, checked);
+    const pathStates = new Map(paths.map((relativePath) => [relativePath, checked]));
+
+    this.applyOptimisticStagingStates(pathStates);
+    this.queueStagingStates(this.state.selectedRoot, pathStates);
+  }
+
+  async applyStagingBatch(changeStates, requestId) {
+    if (!Array.isArray(changeStates) || !this.state.selectedRoot) {
+      return;
+    }
+
+    const knownPaths = new Set(this.state.changes.map((change) => change.path));
+    const pathStates = new Map();
+
+    for (const changeState of changeStates) {
+      const relativePath = String(changeState?.path ?? '');
+
+      if (knownPaths.has(relativePath)) {
+        pathStates.set(relativePath, Boolean(changeState.checked));
+      }
+    }
+
+    if (pathStates.size === 0) {
+      return;
+    }
+
+    this.applyOptimisticStagingStates(pathStates);
+    this.queueStagingStates(
+      this.state.selectedRoot,
+      pathStates,
+      {
+        flushNow: true,
+        requestId: String(requestId || '').slice(0, 200)
+      }
+    );
   }
 
   applyOptimisticStaging(paths, checked) {
-    const pathSet = new Set(paths);
+    this.applyOptimisticStagingStates(new Map(paths.map((relativePath) => [relativePath, checked])));
+  }
+
+  applyOptimisticStagingStates(pathStates) {
     let changed = false;
     const changes = this.state.changes.map((change) => {
-      if (!pathSet.has(change.path) || change.staged === checked) {
+      if (!pathStates.has(change.path)) {
+        return change;
+      }
+
+      const checked = pathStates.get(change.path);
+
+      if (change.staged === checked && !change.partiallyStaged) {
         return change;
       }
 
       changed = true;
       return {
         ...change,
-        staged: checked
+        staged: checked,
+        hasStaged: checked,
+        hasUnstaged: !checked,
+        partiallyStaged: false
       };
     });
 
@@ -365,28 +696,129 @@ class PhpStormCommitPanelProvider {
     this.postState();
   }
 
-  enqueueStagingOperation(root, paths, checked) {
+  queueStagingOperation(root, paths, checked) {
+    this.queueStagingStates(
+      root,
+      new Map(paths.map((relativePath) => [relativePath, checked]))
+    );
+  }
+
+  queueStagingStates(root, pathStates, options = {}) {
+    const startingFresh = !this.hasPendingStagingWork();
+    const requestId = String(options.requestId || '');
+
+    this.clearScheduledRefresh();
+    this.stagingStateVersion += 1;
+    this.state = {
+      ...this.state,
+      confirmedStagingRequestIds: []
+    };
+
+    if (startingFresh) {
+      this.stagingErrorText = '';
+    }
+
+    for (const [relativePath, checked] of pathStates.entries()) {
+      this.stagingBatch.add(root, [relativePath], checked, requestId);
+    }
+
+    if (this.stagingBatch.hasPending()) {
+      if (options.flushNow) {
+        this.flushQueuedStagingOperations();
+      } else {
+        this.scheduleStagingFlush();
+      }
+    }
+  }
+
+  scheduleStagingFlush(delayMs = 90) {
+    if (this.pendingStagingOperations > 0) {
+      return;
+    }
+
+    this.clearStagingFlushTimer();
+    this.stagingFlushTimer = setTimeout(
+      () => {
+        this.stagingFlushTimer = undefined;
+        this.flushQueuedStagingOperations();
+      },
+      delayMs
+    );
+  }
+
+  clearStagingFlushTimer() {
+    if (!this.stagingFlushTimer) {
+      return;
+    }
+
+    clearTimeout(this.stagingFlushTimer);
+    this.stagingFlushTimer = undefined;
+  }
+
+  hasPendingStagingWork() {
+    return this.pendingStagingOperations > 0
+      || Boolean(this.stagingFlushTimer)
+      || this.stagingBatch.hasPending();
+  }
+
+  flushQueuedStagingOperations() {
+    if (this.pendingStagingOperations > 0) {
+      return;
+    }
+
+    this.clearStagingFlushTimer();
+    const batches = this.stagingBatch.take();
+
+    if (batches.length === 0) {
+      return;
+    }
+
     this.pendingStagingOperations += 1;
     this.operation = this.operation.catch(() => {}).then(async () => {
+      const confirmedStagingRequestIds = [];
+
       try {
-        if (checked) {
-          await git.stagePaths(root, paths);
-        } else {
-          await git.unstagePaths(root, paths);
+        for (const batch of batches) {
+          if (batch.stagePaths.length > 0) {
+            await git.stagePaths(batch.root, batch.stagePaths);
+          }
+
+          if (batch.unstagePaths.length > 0) {
+            await git.unstagePaths(batch.root, batch.unstagePaths);
+          }
+
+          confirmedStagingRequestIds.push(...batch.requestIds);
         }
 
-        this.state = {
-          ...this.state,
-          errorText: ''
-        };
+        if (!this.stagingErrorText) {
+          this.state = {
+            ...this.state,
+            confirmedStagingRequestIds: [...new Set(confirmedStagingRequestIds)],
+            errorText: ''
+          };
+        }
       } catch (error) {
+        this.stagingErrorText = formatError(error);
         this.state = {
           ...this.state,
-          errorText: formatError(error)
+          confirmedStagingRequestIds: [],
+          errorText: this.stagingErrorText
         };
       } finally {
         this.pendingStagingOperations = Math.max(0, this.pendingStagingOperations - 1);
-        this.scheduleRefresh(this.state.errorText ? 0 : 650);
+
+        if (this.pendingStagingOperations === 0) {
+          if (this.stagingBatch.hasPending()) {
+            this.scheduleStagingFlush(0);
+          } else {
+            const stagingErrorText = this.stagingErrorText;
+            this.scheduleRefresh(
+              stagingErrorText ? 0 : 650,
+              { preserveErrorText: stagingErrorText }
+            );
+          }
+        }
+
         this.postState();
       }
     });
@@ -511,7 +943,7 @@ class PhpStormCommitPanelProvider {
     }, `${path.basename(leftPath)} (HEAD)`);
     let right;
 
-    if (change.staged) {
+    if (change.staged && !change.partiallyStaged) {
       if (change.deletedInView) {
         right = createEmptyUri(`${path.basename(change.path)} (deleted)`);
       } else {
@@ -532,7 +964,7 @@ class PhpStormCommitPanelProvider {
       'vscode.diff',
       left,
       right,
-      `${change.path} (${change.staged ? 'checked' : 'working tree'})`
+      `${change.path} (${change.staged && !change.partiallyStaged ? 'checked' : 'working tree'})`
     );
   }
 
@@ -557,6 +989,7 @@ class PhpStormCommitPanelProvider {
     this.clearScheduledRefresh();
 
     this.operation = this.operation.catch(() => {}).then(async () => {
+      this.stagingErrorText = '';
       this.state = {
         ...this.state,
         busy: true,
@@ -603,12 +1036,15 @@ class PhpStormCommitPanelProvider {
     this.postState();
   }
 
-  scheduleRefresh(delayMs) {
+  scheduleRefresh(delayMs, options = {}) {
     this.clearScheduledRefresh();
-    this.pendingRefreshTimer = setTimeout(() => {
-      this.pendingRefreshTimer = undefined;
-      this.refresh();
-    }, delayMs);
+    this.pendingRefreshTimer = setTimeout(
+      () => {
+        this.pendingRefreshTimer = undefined;
+        this.refresh(options);
+      },
+      delayMs
+    );
   }
 
   clearScheduledRefresh() {

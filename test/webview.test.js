@@ -3,10 +3,29 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { buildFileIconTheme, renderWebview } = require('../src/webview');
+const {
+  buildFileIconTheme,
+  reconcileOptimisticStagingChanges,
+  renderWebview,
+  resolveFolderCheckboxChecked
+} = require('../src/webview');
 
 function run() {
-  const html = renderWebview({ cspSource: 'vscode-resource:' });
+  const webview = {
+    cspSource: 'vscode-resource:',
+    asWebviewUri(uri) {
+      return {
+        toString() {
+          return 'webview-resource://' + uri.fsPath.replace(/\\/g, '/');
+        }
+      };
+    }
+  };
+  const html = renderWebview(
+    webview,
+    undefined,
+    { fsPath: path.join(__dirname, '..') }
+  );
   const extensionSource = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
   const webviewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'webview.js'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -27,6 +46,34 @@ function run() {
       themePath: './themes/test-icon-theme.json'
     }
   );
+
+  assert.equal(
+    resolveFolderCheckboxChecked(60, 2),
+    true,
+    'a partially checked folder checkbox must resolve to checked'
+  );
+  assert.equal(
+    resolveFolderCheckboxChecked(60, 60),
+    false,
+    'a fully checked folder must resolve to unchecked'
+  );
+  assert.equal(
+    resolveFolderCheckboxChecked(60, 0),
+    true,
+    'an unchecked folder must be allowed to resolve to checked'
+  );
+  assert.equal(
+    resolveFolderCheckboxChecked(0, 0),
+    false,
+    'an empty folder must not resolve to checked'
+  );
+  assert.match(
+    html,
+    /function resolveFolderCheckboxChecked\(fileCount, fullyCheckedCount\)/,
+    'the tested folder checkbox rule must be injected into the webview runtime'
+  );
+
+  testParentFolderUncheckSurvivesStaleGitStates();
 
   assert.match(
     html,
@@ -104,18 +151,24 @@ function run() {
   );
   assert.match(
     html,
-    /id="view-mode-toggle"[\s\S]*?<svg viewBox="0 0 16 16"/,
-    'changes toolbar eye button must be the visible view-mode toggle'
+    /id="view-options"[\s\S]*?aria-haspopup="menu"[\s\S]*?actions-show\.svg/,
+    'the view-options button must use the real PhpStorm eye asset'
   );
-  assert.match(
+  assert.doesNotMatch(
     html,
     /function toggleViewMode\(\)/,
-    'eye button must toggle directory and flat list view modes'
+    'the removed one-click eye toggle must not return'
   );
+  assert.ok(!html.includes('id="group-menu"'), 'a duplicate group menu trigger must not remain beside the eye');
   assert.match(
     html,
     /let viewMode = persisted\.viewMode === 'flat' \? 'flat' : 'directory';/,
     'view mode must persist across webview reloads'
+  );
+  assert.match(
+    html,
+    /event\.ctrlKey && event\.altKey && event\.key\.toLowerCase\(\) === 'p'/,
+    'the displayed Ctrl+Alt+P shortcut must toggle directory grouping'
   );
   assert.match(
     html,
@@ -193,13 +246,43 @@ function run() {
   );
   assert.match(
     html,
-    /function setLocalChecked\(paths, checked\)[\s\S]*?renderChangesKeepingScroll\(\);/,
-    'checkbox staging must not jump the changes list back to the top'
+    /function setLocalChecked\(paths, checked\)[\s\S]*?scheduleLocalRender\(\);/,
+    'checkbox staging must schedule one local render instead of rendering every rapid click synchronously'
   );
   assert.match(
     html,
-    /const layoutVersion = 3;/,
-    'layout version must reset old persisted pane widths'
+    /function scheduleLocalRender\(\)[\s\S]*?window\.requestAnimationFrame[\s\S]*?renderChangesKeepingScroll\(\);[\s\S]*?renderCommitPanel\(\);[\s\S]*?renderDiffPreview\(\);/,
+    'rapid checkbox changes must be coalesced into one render frame'
+  );
+  assert.match(
+    html,
+    /function folderRow\(node, depth\)[\s\S]*?checkbox\.addEventListener\('click', function \(event\) \{[\s\S]*?const paths = collectFilePaths\(node\);[\s\S]*?const checked = resolveFolderCheckboxChecked\(\s*paths\.length,\s*countFullyCheckedPaths\(paths\)\s*\);[\s\S]*?setLocalChecked\(paths, checked\);[\s\S]*?queueStagingChanges\(paths, checked\);/,
+    'folder checkbox clicks must use live descendant state so a second click after full selection unchecks every descendant'
+  );
+  assert.match(
+    html,
+    /const stagingDebounceDelayMs = 350;[\s\S]*?const pendingStagingStates = new Map\(\);[\s\S]*?function queueStagingChanges\(paths, checked\)/,
+    'checkbox clicks must be debounced in the webview before they reach the extension host'
+  );
+  assert.match(
+    html,
+    /function flushPendingStagingChanges\(\)[\s\S]*?type: 'applyStagingBatch'[\s\S]*?requestId: requestId[\s\S]*?changes: changes/,
+    'the webview must send one staging batch after the debounce window'
+  );
+  assert.doesNotMatch(
+    html,
+    /type: 'toggleChange'/,
+    'file checkbox clicks must not send immediate single-file staging messages'
+  );
+  assert.doesNotMatch(
+    html,
+    /type: 'toggleChanges'/,
+    'folder checkbox clicks must not send immediate multi-file staging messages'
+  );
+  assert.match(
+    html,
+    /const layoutVersion = 4;/,
+    'layout version must reset persisted dimensions for the new preview layout'
   );
   assert.match(
     html,
@@ -210,11 +293,6 @@ function run() {
     html,
     /appearance:\s*none;/,
     'checkboxes must use the custom subdued checkbox style instead of the bright native accent'
-  );
-  assert.match(
-    html,
-    /id="group-menu"/,
-    'changes toolbar must expose a PhpStorm-style group/show menu trigger'
   );
   assert.match(
     html,
@@ -230,6 +308,121 @@ function run() {
     html,
     /<div class="menu-section-title">Show<\/div>/,
     'changes toolbar menu must include a Show section'
+  );
+  assert.match(
+    html,
+    /id="show-ignored"[\s\S]*?role="menuitemcheckbox"[\s\S]*?<span>Ignored Files<\/span>/,
+    'ignored files must be a working view option rather than a placeholder'
+  );
+  assert.doesNotMatch(
+    html,
+    /id="show-ignored"[^>]*disabled/,
+    'ignored files option must not be disabled'
+  );
+  assert.match(
+    html,
+    /type: 'setShowIgnored', showIgnored: showIgnored/,
+    'ignored-files view option must request real Git data from the extension host'
+  );
+  assert.match(
+    html,
+    /id="diff-preview-toggle"[\s\S]*?aria-pressed="false"[\s\S]*?actions-preview-details\.svg/,
+    'a separate button with the real PhpStorm PreviewDetails asset must control inline diff'
+  );
+  assert.match(
+    html,
+    /type: 'setDiffPreviewEnabled', enabled: diffPreviewVisible/,
+    'preview visibility must be synchronized with the extension host'
+  );
+  assert.match(
+    html,
+    /class="changes-pane"[\s\S]*?class="commit-pane"[\s\S]*?id="diff-preview" class="diff-preview"/,
+    'preview layout must have changes, commit, and inline diff regions'
+  );
+  assert.match(
+    html,
+    /\.shell\.preview-visible[\s\S]*?grid-template-rows:/,
+    'enabling preview must switch to the PhpStorm two-row left pane layout'
+  );
+  assert.match(
+    html,
+    /function resizeChangesWithKeyboard\(event\)/,
+    'the preview commit splitter must remain keyboard-resizable'
+  );
+  assert.match(
+    html,
+    /id="changes-root-checkbox"/,
+    'Changes root must expose the PhpStorm-style include checkbox'
+  );
+  [
+    'diff-prev-change',
+    'diff-next-change',
+    'diff-edit-source',
+    'diff-prev-file',
+    'diff-next-file',
+    'diff-open-native',
+    'diff-viewer',
+    'diff-ignore-policy',
+    'diff-highlight-policy',
+    'diff-collapse-unchanged',
+    'diff-settings',
+    'diff-help',
+    'diff-stats',
+    'diff-file-checkbox'
+  ].forEach((id) => {
+    assert.ok(html.includes(`id="${id}"`), `inline diff toolbar must include ${id}`);
+  });
+  ['rollback-selected', 'shelve-selected', 'confirm-dialog'].forEach((id) => {
+    assert.ok(html.includes(`id="${id}"`), `changes toolbar workflow must include ${id}`);
+  });
+  assert.match(
+    html,
+    /type: pendingConfirmationAction[\s\S]*?path: selectedPath/,
+    'destructive or state-moving file actions must wait for explicit in-panel confirmation'
+  );
+  [
+    'Do not ignore',
+    'Trim whitespaces',
+    'Ignore whitespaces',
+    'Ignore whitespaces and empty lines',
+    'Ignore imports and formatting',
+    'Unified viewer',
+    'Side-by-side viewer',
+    'Highlight words',
+    'Highlight lines',
+    'Do not highlight'
+  ].forEach((label) => {
+    assert.ok(html.includes(label), `inline diff controls must include ${label}`);
+  });
+  assert.match(
+    html,
+    /type: 'toggleHunk'[\s\S]*?hunkId: hunk\.id[\s\S]*?checked: event\.target\.checked/,
+    'hunk checkboxes must request partial inclusion through stable hunk ids'
+  );
+  assert.match(
+    html,
+    /type: 'selectChange', path: selectedPath/,
+    'selecting a file while preview is visible must load its inline diff'
+  );
+  assert.match(
+    html,
+    /function selectPath\(filePath\)[\s\S]*?vscode\.postMessage\(\{ type: 'selectChange', path: selectedPath \}\);[\s\S]*?function openSelectedDiff\(\)/,
+    'selecting a row must sync selectedPath to the extension host even when inline diff is hidden'
+  );
+  assert.match(
+    html,
+    /const keepLocalSelection = sameRoot[\s\S]*?!nextSelectedPath[\s\S]*?\(stateWithOverlay\.changes \|\| \[\]\)\.some/,
+    'late host refreshes without selectedPath must not erase a still-visible local row selection'
+  );
+  assert.match(
+    html,
+    /function applyOptimisticStagingOverlay\(nextState\)[\s\S]*?reconcileOptimisticStagingChanges\([\s\S]*?nextState\.confirmedStagingRequestIds/,
+    'late host refreshes must keep the latest debounced checkbox state visible until its exact Git request is confirmed'
+  );
+  assert.match(
+    html,
+    /function renderDiffPreview\(\)/,
+    'inline diff must render from the host-provided model'
   );
   assert.match(
     html,
@@ -256,12 +449,68 @@ function run() {
   assert.ok(!html.includes('file-meta'), 'old wide file metadata column must not return');
 
   assert.ok(
-    extensionSource.includes('applyOptimisticStaging(paths, checked);'),
+    extensionSource.includes('applyOptimisticStagingStates(pathStates);'),
     'extension host must optimistically update staged state'
   );
   assert.ok(
-    extensionSource.includes('enqueueStagingOperation(this.state.selectedRoot, paths, checked);'),
+    extensionSource.includes("case 'applyStagingBatch':"),
+    'extension host must accept debounced webview staging batches'
+  );
+  assert.ok(
+    extensionSource.includes('requestId: String(requestId || \'\').slice(0, 200)'),
+    'debounced webview staging batches must flush to Git without a second debounce'
+  );
+  assert.ok(
+    extensionSource.includes('queueStagingStates('),
     'checkbox staging must run through the non-blocking staging queue'
+  );
+  assert.ok(
+    extensionSource.includes('this.stagingBatch.add(root, [relativePath], checked, requestId);'),
+    'rapid checkbox staging requests must be coalesced by path'
+  );
+  assert.match(
+    extensionSource,
+    /const stagingStateVersion = this\.stagingStateVersion;[\s\S]*?if \(stagingStateVersion !== this\.stagingStateVersion\)/,
+    'a Git status read started before a staging request must not overwrite newer optimistic state'
+  );
+  assert.match(
+    extensionSource,
+    /confirmedStagingRequestIds\.push\(\.\.\.batch\.requestIds\);[\s\S]*?confirmedStagingRequestIds: \[\.\.\.new Set\(confirmedStagingRequestIds\)\]/,
+    'the extension host must acknowledge the exact staging request only after its Git command succeeds'
+  );
+  assert.match(
+    extensionSource,
+    /for \(const batch of batches\)[\s\S]*?git\.stagePaths\(batch\.root, batch\.stagePaths\)[\s\S]*?git\.unstagePaths\(batch\.root, batch\.unstagePaths\)/,
+    'one queued staging flush must apply grouped stage and unstage paths'
+  );
+  assert.ok(
+    extensionSource.includes('preserveErrorText: stagingErrorText'),
+    'a failed folder staging operation must remain visible after Git state is refreshed'
+  );
+  assert.match(
+    extensionSource,
+    /const preservedErrorText =[\s\S]*?: this\.stagingErrorText;/,
+    'background refreshes must not erase a staging error before the user can read it'
+  );
+  assert.ok(
+    extensionSource.includes('git.getFileDiff('),
+    'extension host must load real Git data for the inline preview'
+  );
+  assert.ok(
+    extensionSource.includes('this.diffRequestId === requestId'),
+    'late diff responses must not overwrite the current preview selection or options'
+  );
+  assert.ok(
+    extensionSource.includes('git.setHunkIncluded('),
+    'extension host must own and validate partial hunk staging'
+  );
+  assert.ok(
+    extensionSource.includes('git.listIgnoredFiles('),
+    'extension host must load ignored paths only when requested'
+  );
+  assert.ok(
+    extensionSource.includes('git.rollbackPath(') && extensionSource.includes('git.shelvePath('),
+    'extension host must implement the selected-file rollback and shelve actions'
   );
   assert.ok(
     extensionSource.includes('resolveActiveFileIconTheme();'),
@@ -339,6 +588,88 @@ function run() {
     undefined,
     'Activity Bar panel must stay visible in WSL even before a workspace folder is opened'
   );
+}
+
+function testParentFolderUncheckSurvivesStaleGitStates() {
+  const originallyPartial = [
+    change('parent/already-checked.cs', true),
+    change('parent/previously-unchecked.cs', false),
+    change('outside/must-stay-checked.cs', true)
+  ];
+  const selectedRequest = 'panel-1';
+  const unselectedRequest = 'panel-2';
+
+  const selectedOverlay = new Map(originallyPartial.slice(0, 2).map((item) => [
+    item.path,
+    { checked: true, requestId: selectedRequest }
+  ]));
+  const selectedBeforeConfirmation = reconcileOptimisticStagingChanges(
+    originallyPartial,
+    selectedOverlay,
+    []
+  );
+
+  assert.deepEqual(
+    selectedBeforeConfirmation.changes.map((item) => item.staged),
+    [true, true, true],
+    'a stale partial Git state must not undo the parent folder or change an outside file'
+  );
+
+  const unselectedOverlay = new Map(originallyPartial.slice(0, 2).map((item) => [
+    item.path,
+    { checked: false, requestId: unselectedRequest }
+  ]));
+  const staleSelectAllConfirmation = reconcileOptimisticStagingChanges(
+    [
+      change('parent/already-checked.cs', true),
+      change('parent/previously-unchecked.cs', true),
+      change('outside/must-stay-checked.cs', true)
+    ],
+    unselectedOverlay,
+    [selectedRequest]
+  );
+
+  assert.deepEqual(
+    staleSelectAllConfirmation.changes.map((item) => item.staged),
+    [false, false, true],
+    'confirming an older select-all request must not restore the parent or change an outside file'
+  );
+  assert.equal(
+    staleSelectAllConfirmation.optimisticStagingStates.size,
+    2,
+    'the newer parent uncheck must remain pending until its own request is confirmed'
+  );
+
+  const confirmedUncheck = reconcileOptimisticStagingChanges(
+    [
+      change('parent/already-checked.cs', false),
+      change('parent/previously-unchecked.cs', false),
+      change('outside/must-stay-checked.cs', true)
+    ],
+    staleSelectAllConfirmation.optimisticStagingStates,
+    [unselectedRequest]
+  );
+
+  assert.deepEqual(
+    confirmedUncheck.changes.map((item) => item.staged),
+    [false, false, true],
+    'all descendants must remain unchecked and the outside file unchanged after confirmation'
+  );
+  assert.equal(
+    confirmedUncheck.optimisticStagingStates.size,
+    0,
+    'the optimistic parent uncheck may clear only after its exact request is confirmed'
+  );
+}
+
+function change(path, staged) {
+  return {
+    path,
+    staged,
+    hasStaged: staged,
+    hasUnstaged: !staged,
+    partiallyStaged: false
+  };
 }
 
 run();

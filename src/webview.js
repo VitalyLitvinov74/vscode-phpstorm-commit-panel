@@ -5,9 +5,59 @@ const path = require('path');
 
 let vscodeModule;
 
-function renderWebview(webview, fileIconThemeSource) {
+function resolveFolderCheckboxChecked(fileCount, fullyCheckedCount) {
+  const total = Math.max(0, Number(fileCount) || 0);
+  const checked = Math.max(0, Number(fullyCheckedCount) || 0);
+
+  return total > 0 && checked < total;
+}
+
+function reconcileOptimisticStagingChanges(changes, optimisticStagingStates, confirmedRequestIds) {
+  const confirmed = new Set((Array.isArray(confirmedRequestIds) ? confirmedRequestIds : [])
+    .map((requestId) => String(requestId || ''))
+    .filter(Boolean));
+  const remaining = new Map();
+
+  for (const [filePath, optimisticState] of optimisticStagingStates.entries()) {
+    if (!confirmed.has(String(optimisticState?.requestId || ''))) {
+      remaining.set(filePath, optimisticState);
+    }
+  }
+
+  let hasOverlay = false;
+  const reconciledChanges = (Array.isArray(changes) ? changes : []).map((change) => {
+    const optimisticState = remaining.get(change.path);
+
+    if (!optimisticState) {
+      return change;
+    }
+
+    const checked = Boolean(optimisticState.checked);
+    hasOverlay = true;
+    return {
+      ...change,
+      staged: checked,
+      hasStaged: checked,
+      hasUnstaged: !checked,
+      partiallyStaged: false
+    };
+  });
+
+  return {
+    changes: reconciledChanges,
+    hasOverlay,
+    optimisticStagingStates: remaining
+  };
+}
+
+function renderWebview(webview, fileIconThemeSource, extensionUri) {
   const nonce = getNonce();
   const activeFileIcons = buildFileIconTheme(webview, fileIconThemeSource);
+  const actionIcons = buildBundledActionIcons(webview, extensionUri);
+  const showActionIcon = renderActionIcon(actionIcons.show, '');
+  const previewDetailsActionIcon = renderActionIcon(actionIcons.previewDetails, '');
+  const folderCheckboxResolverSource = resolveFolderCheckboxChecked.toString();
+  const stagingReconciliationSource = reconcileOptimisticStagingChanges.toString();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -44,6 +94,11 @@ function renderWebview(webview, fileIconThemeSource) {
       --modified: var(--vscode-gitDecoration-modifiedResourceForeground);
       --deleted: var(--vscode-gitDecoration-deletedResourceForeground);
       --untracked: var(--vscode-gitDecoration-untrackedResourceForeground);
+      --token-keyword: var(--vscode-symbolIcon-keywordForeground, #c586c0);
+      --token-string: var(--vscode-symbolIcon-stringForeground, #ce9178);
+      --token-number: var(--vscode-symbolIcon-numberForeground, #b5cea8);
+      --token-variable: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+      --token-comment: var(--vscode-descriptionForeground, #6a9955);
       --left-pane-width: 42vw;
     }
 
@@ -96,35 +151,101 @@ function renderWebview(webview, fileIconThemeSource) {
     .shell {
       display: grid;
       grid-template-columns: var(--left-pane-width) 12px minmax(320px, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       height: 100vh;
       min-width: 680px;
       background: var(--editor-bg);
     }
 
-    .left,
-    .right {
+    .changes-pane,
+    .commit-pane,
+    .diff-preview {
       min-width: 0;
       min-height: 0;
     }
 
-    .left {
+    .changes-pane {
+      grid-column: 1;
+      grid-row: 1;
       display: grid;
       grid-template-rows: 30px 28px 1fr;
       background: var(--panel-bg);
       border-right: 1px solid var(--border-soft);
     }
 
-    .right {
+    .commit-pane {
+      grid-column: 3;
+      grid-row: 1;
       display: grid;
       grid-template-rows: 42px 1fr 42px;
       background: var(--editor-bg);
     }
 
+    .shell.preview-visible {
+      grid-template-rows: var(--changes-pane-height, minmax(150px, 56%)) 7px minmax(155px, 1fr);
+    }
+
+    .shell.preview-visible .changes-pane {
+      grid-column: 1;
+      grid-row: 1;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .shell.preview-visible .commit-pane {
+      grid-column: 1;
+      grid-row: 3;
+      border-right: 1px solid var(--border-soft);
+    }
+
+    .diff-preview {
+      display: none;
+      grid-column: 3;
+      grid-row: 1 / 4;
+      grid-template-rows: 38px 30px minmax(0, 1fr);
+      background: var(--editor-bg);
+    }
+
+    .shell.preview-visible .diff-preview {
+      display: grid;
+    }
+
     .splitter {
+      grid-column: 2;
+      grid-row: 1 / 4;
       position: relative;
       background: transparent;
       cursor: col-resize;
       outline: none;
+    }
+
+    .commit-splitter {
+      display: none;
+      grid-column: 1;
+      grid-row: 2;
+      position: relative;
+      cursor: row-resize;
+      background: transparent;
+    }
+
+    .shell.preview-visible .commit-splitter {
+      display: block;
+    }
+
+    .commit-splitter::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      right: 0;
+      left: 0;
+      height: 1px;
+      background: var(--border-soft);
+      transform: translateY(-50%);
+    }
+
+    .commit-splitter:hover,
+    .commit-splitter.dragging,
+    .commit-splitter:focus-visible {
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
     }
 
     .splitter::before {
@@ -213,6 +334,17 @@ function renderWebview(webview, fileIconThemeSource) {
       stroke-linecap: round;
       stroke-linejoin: round;
       opacity: 0.92;
+    }
+
+    .jetbrains-action-icon {
+      width: 16px;
+      height: 16px;
+      display: block;
+    }
+
+    body.vscode-light .jetbrains-action-icon.dark,
+    body:not(.vscode-light) .jetbrains-action-icon.light {
+      display: none;
     }
 
     .tool-button:hover:not(:disabled) {
@@ -806,42 +938,435 @@ function renderWebview(webview, fileIconThemeSource) {
       font-size: 16px;
     }
 
+    .diff-toolbar {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border-soft);
+      background: color-mix(in srgb, var(--panel-bg) 55%, var(--editor-bg) 45%);
+    }
+
+    .diff-toolbar .tool-button {
+      flex: 0 0 24px;
+    }
+
+    .diff-select {
+      height: 25px;
+      min-width: 112px;
+      max-width: 190px;
+      color: var(--text);
+      background: var(--vscode-dropdown-background, var(--input-bg));
+      border: 1px solid var(--vscode-dropdown-border, var(--border-soft));
+      border-radius: 4px;
+      padding: 0 6px;
+      outline: none;
+    }
+
+    .diff-select:focus {
+      border-color: var(--accent);
+    }
+
+    .diff-stats {
+      min-width: 0;
+      margin-left: auto;
+      overflow: hidden;
+      color: var(--muted);
+      font-family: var(--vscode-editor-font-family, monospace);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diff-pathbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      padding: 4px 12px;
+      border-bottom: 1px solid var(--border-soft);
+      color: var(--muted);
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+
+    .diff-revision {
+      color: var(--vscode-textLink-foreground);
+      white-space: nowrap;
+    }
+
+    .diff-path {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diff-body {
+      position: relative;
+      min-height: 0;
+      overflow: auto;
+      background: var(--editor-bg);
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: var(--vscode-editor-font-size, 13px);
+      line-height: var(--vscode-editor-line-height, 20px);
+    }
+
+    .diff-file-header {
+      position: sticky;
+      z-index: 3;
+      top: 0;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 29px;
+      padding: 4px 9px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--editor-bg) 91%, var(--panel-bg) 9%);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .diff-file-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diff-hunk {
+      scroll-margin-top: 34px;
+      border-bottom: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+    }
+
+    .diff-hunk.active {
+      box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 78%, transparent);
+    }
+
+    .diff-hunk-header {
+      position: sticky;
+      z-index: 2;
+      top: 29px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px;
+      min-height: 25px;
+      padding: 2px 9px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--vscode-diffEditor-unchangedRegionBackground, var(--panel-bg)) 72%, var(--editor-bg) 28%);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .diff-hunk-header.included {
+      color: var(--text);
+    }
+
+    .diff-hunk-source {
+      color: var(--muted);
+      font-family: var(--vscode-font-family);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .diff-row {
+      display: grid;
+      grid-template-columns: 52px 52px minmax(max-content, 1fr);
+      min-height: 20px;
+      white-space: pre;
+    }
+
+    .diff-row.hide-line-numbers {
+      grid-template-columns: minmax(max-content, 1fr);
+    }
+
+    .diff-row.side-by-side {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      border-bottom: 1px solid color-mix(in srgb, var(--border-soft) 32%, transparent);
+    }
+
+    .diff-line-number {
+      padding: 0 8px 0 4px;
+      color: var(--vscode-editorLineNumber-foreground, var(--muted));
+      background: color-mix(in srgb, var(--editor-bg) 94%, var(--panel-bg) 6%);
+      border-right: 1px solid color-mix(in srgb, var(--border-soft) 58%, transparent);
+      text-align: right;
+      user-select: none;
+    }
+
+    .diff-code {
+      min-width: 0;
+      padding: 0 10px;
+      overflow: hidden;
+      color: var(--vscode-editor-foreground, var(--text));
+    }
+
+    .indent-guide {
+      display: inline-block;
+      border-left: 1px solid color-mix(in srgb, var(--muted) 24%, transparent);
+    }
+
+    .diff-blame {
+      display: inline-block;
+      min-width: 118px;
+      margin-right: 10px;
+      overflow: hidden;
+      color: var(--muted);
+      font-family: var(--vscode-font-family);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+      white-space: nowrap;
+    }
+
+    .tok-keyword { color: var(--token-keyword); }
+    .tok-string { color: var(--token-string); }
+    .tok-number { color: var(--token-number); }
+    .tok-variable { color: var(--token-variable); }
+    .tok-comment { color: var(--token-comment); }
+
+    .diff-body.soft-wrap .diff-row,
+    .diff-body.soft-wrap .diff-code {
+      min-width: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .diff-row.add,
+    .diff-side.add {
+      background: var(--vscode-diffEditor-insertedLineBackground, color-mix(in srgb, var(--success) 16%, transparent));
+    }
+
+    .diff-row.delete,
+    .diff-side.delete {
+      background: var(--vscode-diffEditor-removedLineBackground, color-mix(in srgb, var(--deleted) 16%, transparent));
+    }
+
+    .diff-body.highlight-none .diff-row.add,
+    .diff-body.highlight-none .diff-row.delete,
+    .diff-body.highlight-none .diff-side.add,
+    .diff-body.highlight-none .diff-side.delete {
+      background: transparent;
+    }
+
+    .diff-body.highlight-line .diff-row.add,
+    .diff-body.highlight-line .diff-side.add {
+      background: color-mix(in srgb, var(--vscode-diffEditor-insertedLineBackground, var(--success)) 82%, transparent);
+    }
+
+    .diff-body.highlight-line .diff-row.delete,
+    .diff-body.highlight-line .diff-side.delete {
+      background: color-mix(in srgb, var(--vscode-diffEditor-removedLineBackground, var(--deleted)) 82%, transparent);
+    }
+
+    .diff-mark.add {
+      background: var(--vscode-diffEditor-insertedTextBackground, color-mix(in srgb, var(--success) 32%, transparent));
+    }
+
+    .diff-mark.delete {
+      background: var(--vscode-diffEditor-removedTextBackground, color-mix(in srgb, var(--deleted) 32%, transparent));
+    }
+
+    .diff-side {
+      display: grid;
+      grid-template-columns: 52px minmax(max-content, 1fr);
+      min-width: 0;
+      border-right: 1px solid var(--border-soft);
+    }
+
+    .diff-side.hide-line-numbers {
+      grid-template-columns: minmax(max-content, 1fr);
+    }
+
+    .diff-omitted {
+      padding: 2px 12px;
+      color: var(--muted);
+      background: var(--vscode-diffEditor-unchangedRegionBackground, var(--panel-bg));
+      border-top: 1px solid var(--border-soft);
+      border-bottom: 1px solid var(--border-soft);
+      font-family: var(--vscode-font-family);
+      font-size: 11px;
+    }
+
+    .diff-empty {
+      margin: 18px;
+      padding: 18px;
+      color: var(--muted);
+      border: 1px solid var(--border-soft);
+      border-radius: 5px;
+      font-family: var(--vscode-font-family);
+      line-height: 1.5;
+    }
+
+    .popup-menu {
+      position: absolute;
+      z-index: 20;
+      top: 34px;
+      right: 8px;
+      width: 246px;
+      padding: 7px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--editor-bg) 88%, var(--panel-bg) 12%);
+      border: 1px solid var(--border-soft);
+      border-radius: 6px;
+      box-shadow: 0 8px 24px color-mix(in srgb, black 36%, transparent);
+    }
+
+    .popup-menu[hidden] {
+      display: none;
+    }
+
+    .popup-menu .menu-item {
+      grid-template-columns: 22px minmax(0, 1fr);
+    }
+
+    .help-popup {
+      width: 280px;
+      padding: 11px 13px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .help-popup div:first-child {
+      color: var(--text);
+      margin-bottom: 5px;
+    }
+
+    .ignored-group {
+      min-height: 24px;
+      padding: 5px 8px 2px 26px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .ignored-row {
+      opacity: 0.62;
+    }
+
+    .dialog-overlay {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: color-mix(in srgb, black 46%, transparent);
+    }
+
+    .dialog-overlay[hidden] {
+      display: none;
+    }
+
+    .confirm-dialog {
+      width: min(430px, 100%);
+      padding: 16px;
+      color: var(--text);
+      background: var(--editor-bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      box-shadow: 0 12px 34px color-mix(in srgb, black 48%, transparent);
+    }
+
+    .confirm-title {
+      margin-bottom: 9px;
+      font-size: 14px;
+    }
+
+    .confirm-message {
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .confirm-actions .secondary {
+      min-width: 86px;
+    }
+
     @media (max-width: 760px) {
       .shell {
         grid-template-columns: 1fr;
-        grid-template-rows: 44% 6px 56%;
+        grid-template-rows: minmax(150px, 44fr) minmax(155px, 56fr);
         min-width: 0;
       }
 
-      .left {
+      .changes-pane {
         border-right: 0;
         border-bottom: 1px solid var(--border-soft);
       }
 
-      .splitter {
-        cursor: row-resize;
+      .commit-pane {
+        grid-column: 1;
+        grid-row: 2;
+      }
+
+      .shell.preview-visible {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(150px, 34fr) minmax(155px, 32fr) minmax(180px, 34fr);
+        overflow: auto;
+      }
+
+      .shell.preview-visible .changes-pane {
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      .shell.preview-visible .commit-pane {
+        grid-column: 1;
+        grid-row: 2;
+      }
+
+      .shell.preview-visible .diff-preview {
+        grid-column: 1;
+        grid-row: 3;
+      }
+
+      .splitter,
+      .shell.preview-visible .splitter,
+      .shell.preview-visible .commit-splitter {
+        display: none;
       }
     }
   </style>
 </head>
 <body>
   <main id="shell" class="shell">
-    <section class="left" aria-label="Changes">
+    <section class="changes-pane" aria-label="Changes">
       <div id="changes-toolbar" class="toolbar">
         <div class="toolbar-group" aria-label="Repository actions">
           <button id="refresh" class="tool-button" title="Refresh changes">&#x21BB;</button>
+          <button id="rollback-selected" class="tool-button" title="Rollback selected change" aria-label="Rollback selected change">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.5 4 2.5 7l3 3M3 7h6a4 4 0 0 1 4 4"></path></svg>
+          </button>
+          <button id="shelve-selected" class="tool-button" title="Shelve selected change" aria-label="Shelve selected change">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11v9h-11zM5 6h6M5 8.5h6M6.5 11h3"></path></svg>
+          </button>
           <button id="unstage-all" class="tool-button" title="Uncheck all changes">&minus;</button>
           <button id="stage-all" class="tool-button" title="Check all changes">+</button>
         </div>
         <span class="tool-separator" aria-hidden="true"></span>
         <div class="toolbar-group" aria-label="View actions">
-          <button id="view-mode-toggle" class="tool-button view-mode-toggle active" title="Directory view. Click to show flat list" aria-label="Toggle changes view" aria-pressed="true">
+          <button id="view-options" class="tool-button" title="View options" aria-label="View options" aria-haspopup="menu" aria-expanded="false">
+            ${showActionIcon}
+          </button>
+          <button id="diff-preview-toggle" class="tool-button" title="Show diff preview" aria-label="Show diff preview" aria-pressed="false">
+            ${previewDetailsActionIcon}
+          </button>
+          <button id="open-selected-diff" class="tool-button" title="Show diff in editor" aria-label="Show diff in editor">
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <path d="M1.8 8s2.2-4 6.2-4 6.2 4 6.2 4-2.2 4-6.2 4-6.2-4-6.2-4z"></path>
-              <circle cx="8" cy="8" r="1.8"></circle>
+              <path d="M3 2.5h7l3 3v8H3zM10 2.5v3h3M5.5 8h5M5.5 10.5h5"></path>
             </svg>
           </button>
-          <button id="group-menu" class="tool-button" title="Group and show options" aria-haspopup="menu" aria-expanded="false">&#x25A4;</button>
+          <button id="locate-active-file" class="tool-button" title="Locate active file" aria-label="Locate active file">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <circle cx="8" cy="8" r="5"></circle>
+              <circle cx="8" cy="8" r="1.5"></circle>
+              <path d="M8 1v2M8 13v2M1 8h2M13 8h2"></path>
+            </svg>
+          </button>
         </div>
         <span class="tool-separator" aria-hidden="true"></span>
         <div class="toolbar-group" aria-label="Tree actions">
@@ -873,7 +1398,7 @@ function renderWebview(webview, fileIconThemeSource) {
             <span class="menu-shortcut"></span>
           </button>
           <div class="menu-section-title">Show</div>
-          <button id="show-ignored" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false" disabled>
+          <button id="show-ignored" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false">
             <span class="menu-check"></span>
             <span>Ignored Files</span>
             <span class="menu-shortcut"></span>
@@ -881,7 +1406,8 @@ function renderWebview(webview, fileIconThemeSource) {
         </div>
       </div>
       <div class="changes-header">
-        <span class="disclosure" aria-hidden="true"></span>
+        <button id="changes-root-toggle" class="disclosure-button expanded" type="button" title="Collapse changes" aria-label="Collapse changes"></button>
+        <input id="changes-root-checkbox" class="file-checkbox" type="checkbox" aria-label="Include all changes">
         <span class="changes-title">Changes</span>
         <span id="changes-count" class="changes-count">0</span>
         <span id="changes-summary" class="changes-summary">updating...</span>
@@ -891,7 +1417,9 @@ function renderWebview(webview, fileIconThemeSource) {
 
     <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize changes and commit panels" tabindex="0"></div>
 
-    <section class="right" aria-label="Commit">
+    <div id="commit-splitter" class="commit-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize changes and commit panels" tabindex="0"></div>
+
+    <section class="commit-pane" aria-label="Commit">
       <div class="commit-header">
         <label class="amend-label" title="Amend previous commit">
           <input id="amend" type="checkbox">
@@ -923,20 +1451,114 @@ function renderWebview(webview, fileIconThemeSource) {
         <button id="settings" class="gear" title="Settings">&#x2699;</button>
       </div>
     </section>
+
+    <section id="diff-preview" class="diff-preview" aria-label="Diff preview">
+      <div class="diff-toolbar">
+        <button id="diff-prev-change" class="tool-button" title="Previous difference" aria-label="Previous difference">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 10 8 6l4 4"></path></svg>
+        </button>
+        <button id="diff-next-change" class="tool-button" title="Next difference" aria-label="Next difference">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4"></path></svg>
+        </button>
+        <button id="diff-edit-source" class="tool-button" title="Edit source" aria-label="Edit source">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3 11.8-.5 2 2-.5 7.8-7.8-1.5-1.5zM9.8 5l1.5 1.5"></path></svg>
+        </button>
+        <span class="tool-separator" aria-hidden="true"></span>
+        <button id="diff-prev-file" class="tool-button" title="Previous file" aria-label="Previous file">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m10 4-4 4 4 4"></path></svg>
+        </button>
+        <button id="diff-next-file" class="tool-button" title="Next file" aria-label="Next file">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 4 4 4-4 4"></path></svg>
+        </button>
+        <button id="diff-open-native" class="tool-button" title="Open diff in editor" aria-label="Open diff in editor">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 2.5h7l3 3v8H3zM10 2.5v3h3M5.5 8h5M5.5 10.5h5"></path></svg>
+        </button>
+        <select id="diff-viewer" class="diff-select" title="Diff viewer" aria-label="Diff viewer">
+          <option value="unified">Unified viewer</option>
+          <option value="side-by-side">Side-by-side viewer</option>
+        </select>
+        <select id="diff-ignore-policy" class="diff-select" title="Whitespace policy" aria-label="Whitespace policy">
+          <option value="none">Do not ignore</option>
+          <option value="trim">Trim whitespaces</option>
+          <option value="all">Ignore whitespaces</option>
+          <option value="all-and-empty">Ignore whitespaces and empty lines</option>
+          <option value="formatting">Ignore imports and formatting</option>
+        </select>
+        <select id="diff-highlight-policy" class="diff-select" title="Highlight policy" aria-label="Highlight policy">
+          <option value="word">Highlight words</option>
+          <option value="word-split">Highlight words (split)</option>
+          <option value="char">Highlight characters</option>
+          <option value="line">Highlight lines</option>
+          <option value="none">Do not highlight</option>
+        </select>
+        <button id="diff-collapse-unchanged" class="tool-button active" title="Collapse unchanged fragments" aria-label="Collapse unchanged fragments" aria-pressed="true">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 3 4 4 4-4M4 13l4-4 4 4"></path></svg>
+        </button>
+        <button id="diff-settings" class="tool-button" title="Diff settings" aria-label="Diff settings" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1M11.4 11.4l1 1M12.4 3.6l-1 1M4.6 11.4l-1 1"></path></svg>
+        </button>
+        <button id="diff-help" class="tool-button" title="Diff help" aria-label="Diff help" aria-haspopup="dialog">?</button>
+        <span id="diff-stats" class="diff-stats">0 differences, 0 included</span>
+        <div id="diff-settings-menu" class="popup-menu" role="menu" hidden>
+          <button id="diff-show-blame" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false"><span class="menu-check"></span><span>Annotate with Git Blame</span></button>
+          <button id="diff-show-whitespace" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false"><span class="menu-check"></span><span>Show Whitespaces</span></button>
+          <button id="diff-show-line-numbers" class="menu-item selected" type="button" role="menuitemcheckbox" aria-checked="true"><span class="menu-check">&#x2713;</span><span>Show Line Numbers</span></button>
+          <button id="diff-show-indent-guides" class="menu-item selected" type="button" role="menuitemcheckbox" aria-checked="true"><span class="menu-check">&#x2713;</span><span>Show Indent Guides</span></button>
+          <button id="diff-soft-wrap" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false"><span class="menu-check"></span><span>Soft-Wrap</span></button>
+          <button class="menu-item" type="button" disabled><span class="menu-check"></span><span>Highlighting Level ›</span></button>
+          <button id="diff-breadcrumbs" class="menu-item selected" type="button" role="menuitemcheckbox" aria-checked="true"><span class="menu-check">&#x2713;</span><span>Breadcrumbs</span></button>
+        </div>
+        <div id="diff-help-popup" class="popup-menu help-popup" role="dialog" hidden>
+          <div>Inline diff preview</div>
+          <div>Use Alt+↑/↓ to move between differences and Alt+←/→ to move between changed files. Check a fragment to include it in the commit.</div>
+        </div>
+      </div>
+      <div id="diff-pathbar" class="diff-pathbar">
+        <span id="diff-revision" class="diff-revision"></span>
+        <span id="diff-path" class="diff-path">Select a changed file</span>
+      </div>
+      <div id="diff-body" class="diff-body highlight-word">
+        <div class="diff-file-header">
+          <input id="diff-file-checkbox" class="file-checkbox" type="checkbox" aria-label="Include current file">
+          <span class="diff-file-label">Current version</span>
+        </div>
+        <div id="diff-content"></div>
+      </div>
+    </section>
+
+    <div id="confirm-dialog" class="dialog-overlay" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+        <div id="confirm-title" class="confirm-title">Confirm action</div>
+        <div id="confirm-message" class="confirm-message"></div>
+        <div class="confirm-actions">
+          <button id="confirm-cancel" class="secondary">Cancel</button>
+          <button id="confirm-accept" class="primary">Continue</button>
+        </div>
+      </div>
+    </div>
   </main>
 
   <script nonce="${nonce}">
     (function () {
       const vscode = acquireVsCodeApi();
       const activeFileIcons = ${serializeForScript(activeFileIcons)};
+      ${folderCheckboxResolverSource}
+      ${stagingReconciliationSource}
       const elements = {};
       const persisted = vscode.getState() || {};
-      const layoutVersion = 3;
+      const layoutVersion = 4;
       const hasPersistedPaneWidth = persisted.layoutVersion === layoutVersion
         && Number.isFinite(Number(persisted.leftPaneWidth));
       let state = {
         repositories: [],
         changes: [],
+        ignoredFiles: [],
+        showIgnored: false,
+        diffPreviewEnabled: false,
+        selectedPath: '',
+        diffPreview: undefined,
+        diffLoading: false,
+        diffIgnorePolicy: 'none',
         message: '',
         amend: false,
         commitLanguage: 'auto',
@@ -950,6 +1572,29 @@ function renderWebview(webview, fileIconThemeSource) {
       const splitterWidth = 12;
       let selectedPath = '';
       let viewMode = persisted.viewMode === 'flat' ? 'flat' : 'directory';
+      let showIgnored = persisted.showIgnored === true;
+      let diffPreviewVisible = persisted.diffPreviewVisible === true;
+      let changesCollapsed = persisted.changesCollapsed === true;
+      let diffViewer = persisted.diffViewer === 'side-by-side' ? 'side-by-side' : 'unified';
+      let diffHighlightPolicy = ['word', 'word-split', 'char', 'line', 'none'].includes(persisted.diffHighlightPolicy)
+        ? persisted.diffHighlightPolicy
+        : 'word';
+      let diffIgnorePolicy = ['none', 'trim', 'all', 'all-and-empty', 'formatting'].includes(persisted.diffIgnorePolicy)
+        ? persisted.diffIgnorePolicy
+        : 'none';
+      let collapseUnchanged = persisted.collapseUnchanged !== false;
+      let showWhitespace = persisted.showWhitespace === true;
+      let showLineNumbers = persisted.showLineNumbers !== false;
+      let showIndentGuides = persisted.showIndentGuides !== false;
+      let softWrap = persisted.softWrap === true;
+      let showBreadcrumbs = persisted.showBreadcrumbs !== false;
+      let showBlame = persisted.showBlame === true;
+      let activeHunkIndex = 0;
+      let changesResizeStart = null;
+      let pendingConfirmationAction = '';
+      let changesPaneHeight = Number.isFinite(Number(persisted.changesPaneHeight))
+        ? Number(persisted.changesPaneHeight)
+        : 0;
       let leftPaneWidth = hasPersistedPaneWidth
         ? Number(persisted.leftPaneWidth)
         : 0;
@@ -958,16 +1603,54 @@ function renderWebview(webview, fileIconThemeSource) {
         : []);
       let dragStart = null;
       let lastRenderedChangesRoot = '';
+      let localRenderFrame = 0;
+      let stagingDebounceTimer = 0;
+      const stagingDebounceDelayMs = 350;
+      const pendingStagingStates = new Map();
+      const optimisticStagingStates = new Map();
+      const stagingRequestSession = ${serializeForScript(nonce)};
+      let stagingRequestSequence = 0;
+      let pendingStagingRequestId = '';
 
       window.addEventListener('message', function (event) {
         if (event.data && event.data.type === 'state') {
           const nextState = event.data.state || state;
-          const shouldKeepScroll = Boolean(state.selectedRoot)
-            && state.selectedRoot === nextState.selectedRoot
+          const sameRoot = Boolean(state.selectedRoot)
+            && state.selectedRoot === nextState.selectedRoot;
+          const stateWithOverlay = sameRoot
+            ? applyOptimisticStagingOverlay(nextState)
+            : nextState;
+          const shouldKeepScroll = sameRoot
             && elements['changes-list'];
           const scrollTop = shouldKeepScroll ? captureChangesListScrollTop() : null;
+          const nextSelectedPath = typeof stateWithOverlay.selectedPath === 'string'
+            ? stateWithOverlay.selectedPath
+            : '';
+          const keepLocalSelection = sameRoot
+            && !nextSelectedPath
+            && Boolean(selectedPath)
+            && (stateWithOverlay.changes || []).some(function (change) {
+              return change.path === selectedPath;
+            });
 
-          state = nextState;
+          if (!sameRoot) {
+            clearPendingStagingChanges();
+            optimisticStagingStates.clear();
+          }
+
+          state = keepLocalSelection
+            ? Object.assign({}, stateWithOverlay, { selectedPath: selectedPath })
+            : stateWithOverlay;
+          showIgnored = Boolean(stateWithOverlay.showIgnored);
+          diffPreviewVisible = Boolean(stateWithOverlay.diffPreviewEnabled);
+          showBlame = Boolean(stateWithOverlay.showBlame);
+          diffIgnorePolicy = ['none', 'trim', 'all', 'all-and-empty', 'formatting'].includes(stateWithOverlay.diffIgnorePolicy)
+            ? stateWithOverlay.diffIgnorePolicy
+            : diffIgnorePolicy;
+
+          if (!keepLocalSelection) {
+            selectedPath = nextSelectedPath;
+          }
           render({ changesScrollTop: scrollTop });
         }
       });
@@ -975,20 +1658,35 @@ function renderWebview(webview, fileIconThemeSource) {
       document.addEventListener('DOMContentLoaded', function () {
         cacheElements();
         applyPaneSize();
+        applyPreviewLayout();
         bindEvents();
-        vscode.postMessage({ type: 'ready' });
+        vscode.postMessage({
+          type: 'ready',
+          ui: {
+            showIgnored: showIgnored,
+            diffPreviewEnabled: diffPreviewVisible,
+            selectedPath: persisted.selectedPath || '',
+            diffIgnorePolicy: diffIgnorePolicy,
+            showBlame: showBlame
+          }
+        });
       });
 
       function cacheElements() {
         [
           'shell',
           'splitter',
+          'commit-splitter',
           'changes-toolbar',
           'refresh',
+          'rollback-selected',
+          'shelve-selected',
           'unstage-all',
           'stage-all',
-          'view-mode-toggle',
-          'group-menu',
+          'view-options',
+          'diff-preview-toggle',
+          'open-selected-diff',
+          'locate-active-file',
           'expand-all',
           'collapse-all',
           'view-menu',
@@ -998,6 +1696,8 @@ function renderWebview(webview, fileIconThemeSource) {
           'repo-select',
           'changes-count',
           'changes-summary',
+          'changes-root-toggle',
+          'changes-root-checkbox',
           'changes-list',
           'amend',
           'last-commit',
@@ -1010,7 +1710,40 @@ function renderWebview(webview, fileIconThemeSource) {
           'commit',
           'commit-push',
           'footer-status',
-          'settings'
+          'settings',
+          'diff-preview',
+          'diff-prev-change',
+          'diff-next-change',
+          'diff-edit-source',
+          'diff-prev-file',
+          'diff-next-file',
+          'diff-open-native',
+          'diff-viewer',
+          'diff-ignore-policy',
+          'diff-highlight-policy',
+          'diff-collapse-unchanged',
+          'diff-settings',
+          'diff-help',
+          'diff-stats',
+          'diff-settings-menu',
+          'diff-help-popup',
+          'diff-show-blame',
+          'diff-show-whitespace',
+          'diff-show-line-numbers',
+          'diff-show-indent-guides',
+          'diff-soft-wrap',
+          'diff-breadcrumbs',
+          'diff-pathbar',
+          'diff-revision',
+          'diff-path',
+          'diff-body',
+          'diff-file-checkbox',
+          'diff-content',
+          'confirm-dialog',
+          'confirm-title',
+          'confirm-message',
+          'confirm-cancel',
+          'confirm-accept'
         ].forEach(function (id) {
           elements[id] = document.getElementById(id);
         });
@@ -1020,14 +1753,27 @@ function renderWebview(webview, fileIconThemeSource) {
         elements.refresh.addEventListener('click', function () {
           vscode.postMessage({ type: 'refresh' });
         });
+        elements['rollback-selected'].addEventListener('click', function () {
+          openConfirmation(
+            'rollbackChange',
+            'Rollback selected change?',
+            'All tracked edits in ' + selectedPath + ' will be restored to HEAD.'
+          );
+        });
+        elements['shelve-selected'].addEventListener('click', function () {
+          openConfirmation(
+            'shelveChange',
+            'Shelve selected change?',
+            'Changes in ' + selectedPath + ' will be moved to a recoverable Git stash.'
+          );
+        });
         elements['stage-all'].addEventListener('click', function () {
           vscode.postMessage({ type: 'stageAll' });
         });
         elements['unstage-all'].addEventListener('click', function () {
           vscode.postMessage({ type: 'unstageAll' });
         });
-        elements['view-mode-toggle'].addEventListener('click', toggleViewMode);
-        elements['group-menu'].addEventListener('click', function (event) {
+        elements['view-options'].addEventListener('click', function (event) {
           event.stopPropagation();
           toggleViewMenu();
         });
@@ -1042,8 +1788,27 @@ function renderWebview(webview, fileIconThemeSource) {
           setViewMode('flat');
           closeViewMenu();
         });
+        elements['show-ignored'].addEventListener('click', function () {
+          showIgnored = !showIgnored;
+          persistUiState();
+          renderViewModeControls();
+          closeViewMenu();
+          vscode.postMessage({ type: 'setShowIgnored', showIgnored: showIgnored });
+        });
+        elements['diff-preview-toggle'].addEventListener('click', toggleDiffPreview);
+        elements['open-selected-diff'].addEventListener('click', openSelectedDiff);
+        elements['locate-active-file'].addEventListener('click', function () {
+          vscode.postMessage({ type: 'locateActiveFile' });
+        });
         elements['expand-all'].addEventListener('click', expandAllFolders);
         elements['collapse-all'].addEventListener('click', collapseAllFolders);
+        elements['changes-root-toggle'].addEventListener('click', toggleChangesRoot);
+        elements['changes-root-checkbox'].addEventListener('change', function (event) {
+          const checked = event.target.checked;
+          const paths = (state.changes || []).map(function (change) { return change.path; });
+          setLocalChecked(paths, checked);
+          queueStagingChanges(paths, checked);
+        });
         elements['repo-select'].addEventListener('change', function (event) {
           vscode.postMessage({ type: 'selectRepository', root: event.target.value });
         });
@@ -1076,13 +1841,104 @@ function renderWebview(webview, fileIconThemeSource) {
         elements.history.addEventListener('click', function () {
           vscode.postMessage({ type: 'refresh' });
         });
+        elements['diff-file-checkbox'].addEventListener('change', function (event) {
+          if (!selectedPath) {
+            return;
+          }
+
+          setLocalChecked([selectedPath], event.target.checked);
+          queueStagingChanges([selectedPath], event.target.checked);
+        });
+        elements['diff-prev-change'].addEventListener('click', function () { moveToHunk(-1); });
+        elements['diff-next-change'].addEventListener('click', function () { moveToHunk(1); });
+        elements['diff-prev-file'].addEventListener('click', function () { moveToFile(-1); });
+        elements['diff-next-file'].addEventListener('click', function () { moveToFile(1); });
+        elements['diff-edit-source'].addEventListener('click', function () {
+          if (selectedPath) {
+            vscode.postMessage({ type: 'openFile', path: selectedPath });
+          }
+        });
+        elements['diff-open-native'].addEventListener('click', openSelectedDiff);
+        elements['diff-viewer'].addEventListener('change', function (event) {
+          diffViewer = event.target.value === 'side-by-side' ? 'side-by-side' : 'unified';
+          persistUiState();
+          renderDiffPreview();
+        });
+        elements['diff-ignore-policy'].addEventListener('change', function (event) {
+          diffIgnorePolicy = ['none', 'trim', 'all', 'all-and-empty', 'formatting'].includes(event.target.value)
+            ? event.target.value
+            : 'none';
+          persistUiState();
+          vscode.postMessage({ type: 'setDiffOptions', ignorePolicy: diffIgnorePolicy });
+        });
+        elements['diff-highlight-policy'].addEventListener('change', function (event) {
+          diffHighlightPolicy = event.target.value;
+          persistUiState();
+          renderDiffPreview();
+        });
+        elements['diff-collapse-unchanged'].addEventListener('click', function () {
+          collapseUnchanged = !collapseUnchanged;
+          persistUiState();
+          renderDiffPreview();
+        });
+        elements['diff-settings'].addEventListener('click', function (event) {
+          event.stopPropagation();
+          togglePopup('diff-settings-menu', 'diff-settings');
+        });
+        elements['diff-help'].addEventListener('click', function (event) {
+          event.stopPropagation();
+          togglePopup('diff-help-popup', 'diff-help');
+        });
+        elements['diff-settings-menu'].addEventListener('click', function (event) { event.stopPropagation(); });
+        elements['diff-help-popup'].addEventListener('click', function (event) { event.stopPropagation(); });
+        bindBooleanDiffSetting('diff-show-whitespace', function () { return showWhitespace; }, function (value) { showWhitespace = value; });
+        bindBooleanDiffSetting('diff-show-line-numbers', function () { return showLineNumbers; }, function (value) { showLineNumbers = value; });
+        bindBooleanDiffSetting('diff-show-indent-guides', function () { return showIndentGuides; }, function (value) { showIndentGuides = value; });
+        bindBooleanDiffSetting('diff-soft-wrap', function () { return softWrap; }, function (value) { softWrap = value; });
+        bindBooleanDiffSetting('diff-breadcrumbs', function () { return showBreadcrumbs; }, function (value) { showBreadcrumbs = value; });
+        elements['diff-show-blame'].addEventListener('click', function () {
+          showBlame = !showBlame;
+          persistUiState();
+          renderDiffSettings();
+          vscode.postMessage({ type: 'setDiffBlame', enabled: showBlame });
+        });
+        elements['confirm-cancel'].addEventListener('click', closeConfirmation);
+        elements['confirm-accept'].addEventListener('click', function () {
+          if (pendingConfirmationAction && selectedPath) {
+            vscode.postMessage({ type: pendingConfirmationAction, path: selectedPath });
+          }
+          closeConfirmation();
+        });
         elements.splitter.addEventListener('pointerdown', startResize);
         elements.splitter.addEventListener('dblclick', resetPaneWidth);
         elements.splitter.addEventListener('keydown', resizeWithKeyboard);
-        document.addEventListener('click', closeViewMenu);
+        elements['commit-splitter'].addEventListener('pointerdown', startChangesResize);
+        elements['commit-splitter'].addEventListener('keydown', resizeChangesWithKeyboard);
+        document.addEventListener('click', closeAllMenus);
         document.addEventListener('keydown', function (event) {
           if (event.key === 'Escape') {
-            closeViewMenu();
+            closeAllMenus();
+            closeConfirmation();
+          }
+
+          if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'p') {
+            event.preventDefault();
+            setViewMode(viewMode === 'directory' ? 'flat' : 'directory');
+            return;
+          }
+
+          if (diffPreviewVisible && event.altKey && event.key === 'ArrowUp') {
+            event.preventDefault();
+            moveToHunk(-1);
+          } else if (diffPreviewVisible && event.altKey && event.key === 'ArrowDown') {
+            event.preventDefault();
+            moveToHunk(1);
+          } else if (diffPreviewVisible && event.altKey && event.key === 'ArrowLeft') {
+            event.preventDefault();
+            moveToFile(-1);
+          } else if (diffPreviewVisible && event.altKey && event.key === 'ArrowRight') {
+            event.preventDefault();
+            moveToFile(1);
           }
         });
         window.addEventListener('resize', applyPaneSize);
@@ -1188,7 +2044,22 @@ function renderWebview(webview, fileIconThemeSource) {
           layoutVersion: layoutVersion,
           leftPaneWidth: leftPaneWidth,
           collapsedFolders: Array.from(collapsedFolders),
-          viewMode: viewMode
+          viewMode: viewMode,
+          showIgnored: showIgnored,
+          diffPreviewVisible: diffPreviewVisible,
+          selectedPath: selectedPath,
+          diffViewer: diffViewer,
+          diffHighlightPolicy: diffHighlightPolicy,
+          diffIgnorePolicy: diffIgnorePolicy,
+          collapseUnchanged: collapseUnchanged,
+          showWhitespace: showWhitespace,
+          showLineNumbers: showLineNumbers,
+          showIndentGuides: showIndentGuides,
+          softWrap: softWrap,
+          showBreadcrumbs: showBreadcrumbs,
+          showBlame: showBlame,
+          changesCollapsed: changesCollapsed,
+          changesPaneHeight: changesPaneHeight
         });
         vscode.setState(nextState);
       }
@@ -1210,11 +2081,13 @@ function renderWebview(webview, fileIconThemeSource) {
       }
 
       function render(options) {
+        applyPreviewLayout();
         renderRepositories();
         renderChanges({
           scrollTop: options ? options.changesScrollTop : null
         });
         renderCommitPanel();
+        renderDiffPreview();
       }
 
       function toggleViewMenu() {
@@ -1228,8 +2101,8 @@ function renderWebview(webview, fileIconThemeSource) {
 
         positionViewMenu();
         menu.hidden = false;
-        elements['group-menu'].setAttribute('aria-expanded', 'true');
-        elements['group-menu'].classList.add('active');
+        elements['view-options'].setAttribute('aria-expanded', 'true');
+        elements['view-options'].classList.add('active');
       }
 
       function closeViewMenu() {
@@ -1238,12 +2111,8 @@ function renderWebview(webview, fileIconThemeSource) {
         }
 
         elements['view-menu'].hidden = true;
-        elements['group-menu'].setAttribute('aria-expanded', 'false');
-        elements['group-menu'].classList.remove('active');
-      }
-
-      function toggleViewMode() {
-        setViewMode(viewMode === 'directory' ? 'flat' : 'directory');
+        elements['view-options'].setAttribute('aria-expanded', 'false');
+        elements['view-options'].classList.remove('active');
       }
 
       function setViewMode(mode) {
@@ -1262,9 +2131,206 @@ function renderWebview(webview, fileIconThemeSource) {
         renderCommitPanel();
       }
 
+      function toggleDiffPreview() {
+        diffPreviewVisible = !diffPreviewVisible;
+        persistUiState();
+        applyPreviewLayout();
+        renderDiffPreview();
+        vscode.postMessage({ type: 'setDiffPreviewEnabled', enabled: diffPreviewVisible });
+
+        if (diffPreviewVisible && selectedPath) {
+          vscode.postMessage({ type: 'selectChange', path: selectedPath });
+        }
+      }
+
+      function applyPreviewLayout() {
+        if (!elements.shell) {
+          return;
+        }
+
+        elements.shell.classList.toggle('preview-visible', diffPreviewVisible);
+        elements['diff-preview-toggle'].classList.toggle('active', diffPreviewVisible);
+        elements['diff-preview-toggle'].setAttribute('aria-pressed', diffPreviewVisible ? 'true' : 'false');
+        elements['diff-preview-toggle'].title = diffPreviewVisible ? 'Hide diff preview' : 'Show diff preview';
+
+        if (changesPaneHeight > 0) {
+          elements.shell.style.setProperty('--changes-pane-height', changesPaneHeight + 'px');
+        }
+      }
+
+      function selectPath(filePath) {
+        if (!(state.changes || []).some(function (change) { return change.path === filePath; })) {
+          return;
+        }
+
+        const changed = selectedPath !== filePath;
+        selectedPath = filePath;
+        persistUiState();
+
+        if (changed) {
+          activeHunkIndex = 0;
+          state = Object.assign({}, state, {
+            selectedPath: selectedPath,
+            diffLoading: diffPreviewVisible,
+            diffPreview: diffPreviewVisible ? undefined : state.diffPreview
+          });
+        }
+
+        renderChangesKeepingScroll();
+        renderDiffPreview();
+
+        vscode.postMessage({ type: 'selectChange', path: selectedPath });
+      }
+
+      function openSelectedDiff() {
+        if (selectedPath) {
+          vscode.postMessage({ type: 'openDiff', path: selectedPath });
+        }
+      }
+
+      function moveToFile(direction) {
+        const changes = state.changes || [];
+
+        if (changes.length === 0) {
+          return;
+        }
+
+        const currentIndex = Math.max(0, changes.findIndex(function (change) {
+          return change.path === selectedPath;
+        }));
+        const nextIndex = (currentIndex + direction + changes.length) % changes.length;
+        selectPath(changes[nextIndex].path);
+      }
+
+      function toggleChangesRoot() {
+        changesCollapsed = !changesCollapsed;
+        persistUiState();
+        renderChanges();
+      }
+
+      function closeAllMenus() {
+        closeViewMenu();
+        closePopup('diff-settings-menu', 'diff-settings');
+        closePopup('diff-help-popup', 'diff-help');
+      }
+
+      function openConfirmation(action, title, message) {
+        if (!selectedPath) {
+          return;
+        }
+
+        pendingConfirmationAction = action;
+        elements['confirm-title'].textContent = title;
+        elements['confirm-message'].textContent = message;
+        elements['confirm-dialog'].hidden = false;
+        elements['confirm-accept'].focus();
+      }
+
+      function closeConfirmation() {
+        pendingConfirmationAction = '';
+        elements['confirm-dialog'].hidden = true;
+      }
+
+      function togglePopup(menuId, triggerId) {
+        const menu = elements[menuId];
+        const willOpen = menu.hidden;
+        closeAllMenus();
+        menu.hidden = !willOpen;
+        elements[triggerId].classList.toggle('active', willOpen);
+        elements[triggerId].setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      }
+
+      function closePopup(menuId, triggerId) {
+        const menu = elements[menuId];
+
+        if (!menu) {
+          return;
+        }
+
+        menu.hidden = true;
+        elements[triggerId].classList.remove('active');
+        elements[triggerId].setAttribute('aria-expanded', 'false');
+      }
+
+      function bindBooleanDiffSetting(elementId, getter, setter) {
+        elements[elementId].addEventListener('click', function () {
+          setter(!getter());
+          persistUiState();
+          renderDiffSettings();
+          renderDiffPreview();
+        });
+      }
+
+      function startChangesResize(event) {
+        if (!diffPreviewVisible) {
+          return;
+        }
+
+        event.preventDefault();
+        changesResizeStart = { pointerId: event.pointerId };
+        elements['commit-splitter'].classList.add('dragging');
+        elements['commit-splitter'].setPointerCapture(event.pointerId);
+        elements['commit-splitter'].addEventListener('pointermove', moveChangesResize);
+        elements['commit-splitter'].addEventListener('pointerup', stopChangesResize);
+        elements['commit-splitter'].addEventListener('pointercancel', stopChangesResize);
+      }
+
+      function moveChangesResize(event) {
+        if (!changesResizeStart) {
+          return;
+        }
+
+        const rect = elements.shell.getBoundingClientRect();
+        changesPaneHeight = clamp(event.clientY - rect.top, 140, Math.max(140, rect.height - 162));
+        elements.shell.style.setProperty('--changes-pane-height', changesPaneHeight + 'px');
+      }
+
+      function stopChangesResize() {
+        if (!changesResizeStart) {
+          return;
+        }
+
+        changesResizeStart = null;
+        elements['commit-splitter'].classList.remove('dragging');
+        elements['commit-splitter'].removeEventListener('pointermove', moveChangesResize);
+        elements['commit-splitter'].removeEventListener('pointerup', stopChangesResize);
+        elements['commit-splitter'].removeEventListener('pointercancel', stopChangesResize);
+        persistUiState();
+      }
+
+      function resizeChangesWithKeyboard(event) {
+        const keys = ['ArrowUp', 'ArrowDown', 'Home', 'End'];
+
+        if (!diffPreviewVisible || !keys.includes(event.key)) {
+          return;
+        }
+
+        event.preventDefault();
+        const rect = elements.shell.getBoundingClientRect();
+        const minimum = 140;
+        const maximum = Math.max(minimum, rect.height - 162);
+        const current = changesPaneHeight > 0
+          ? changesPaneHeight
+          : clamp(rect.height * 0.56, minimum, maximum);
+
+        if (event.key === 'ArrowUp') {
+          changesPaneHeight = current - 20;
+        } else if (event.key === 'ArrowDown') {
+          changesPaneHeight = current + 20;
+        } else if (event.key === 'Home') {
+          changesPaneHeight = minimum;
+        } else {
+          changesPaneHeight = maximum;
+        }
+
+        changesPaneHeight = clamp(changesPaneHeight, minimum, maximum);
+        elements.shell.style.setProperty('--changes-pane-height', changesPaneHeight + 'px');
+        persistUiState();
+      }
+
       function positionViewMenu() {
         const toolbarRect = elements['changes-toolbar'].getBoundingClientRect();
-        const buttonRect = elements['group-menu'].getBoundingClientRect();
+        const buttonRect = elements['view-options'].getBoundingClientRect();
         const menuWidth = 284;
         const left = clamp(
           Math.round(buttonRect.left - toolbarRect.left - 8),
@@ -1300,8 +2366,27 @@ function renderWebview(webview, fileIconThemeSource) {
         });
       }
 
+      function scheduleLocalRender() {
+        if (localRenderFrame) {
+          return;
+        }
+
+        const requestFrame = window.requestAnimationFrame || function (callback) {
+          return window.setTimeout(callback, 0);
+        };
+
+        localRenderFrame = requestFrame(function () {
+          localRenderFrame = 0;
+          renderChangesKeepingScroll();
+          renderCommitPanel();
+          renderDiffPreview();
+        });
+      }
+
       function renderChangesWithScroll(options) {
         const selectedRoot = state.selectedRoot || '';
+        const changes = state.changes || [];
+        const ignoredFiles = showIgnored ? state.ignoredFiles || [] : [];
         const scrollTop = options && Number.isFinite(options.scrollTop)
           ? options.scrollTop
           : null;
@@ -1310,9 +2395,20 @@ function renderWebview(webview, fileIconThemeSource) {
           ? 'updating...'
           : changeSummary();
         elements['changes-list'].replaceChildren();
+        elements['changes-list'].hidden = changesCollapsed;
+        elements['changes-root-toggle'].classList.toggle('expanded', !changesCollapsed);
+        elements['changes-root-toggle'].classList.toggle('collapsed', changesCollapsed);
+        elements['changes-root-toggle'].title = changesCollapsed ? 'Expand changes' : 'Collapse changes';
+        elements['changes-root-toggle'].setAttribute('aria-label', elements['changes-root-toggle'].title);
+        const allIncluded = changes.length > 0 && changes.every(function (change) {
+          return change.staged && !change.partiallyStaged;
+        });
+        const anyIncluded = changes.some(function (change) { return change.staged; });
+        elements['changes-root-checkbox'].checked = allIncluded;
+        elements['changes-root-checkbox'].indeterminate = !allIncluded && anyIncluded;
+        elements['changes-root-checkbox'].disabled = Boolean(state.busy) || changes.length === 0;
         lastRenderedChangesRoot = selectedRoot;
 
-        const changes = state.changes || [];
         if (!state.selectedRoot) {
           elements['changes-list'].appendChild(empty('No Git repository', 'Open a folder that contains a Git repository.'));
           selectedPath = '';
@@ -1320,14 +2416,19 @@ function renderWebview(webview, fileIconThemeSource) {
           return;
         }
 
-        if (changes.length === 0) {
+        if (changesCollapsed) {
+          restoreChangesListScrollTop(scrollTop, selectedRoot);
+          return;
+        }
+
+        if (changes.length === 0 && ignoredFiles.length === 0) {
           elements['changes-list'].appendChild(empty('No local changes', 'Edit files in this repository. Checked files will be staged automatically.'));
           selectedPath = '';
           restoreChangesListScrollTop(scrollTop, selectedRoot);
           return;
         }
 
-        if (!selectedPath || !changes.some(function (change) { return change.path === selectedPath; })) {
+        if (changes.length > 0 && (!selectedPath || !changes.some(function (change) { return change.path === selectedPath; }))) {
           selectedPath = changes[0].path;
         }
 
@@ -1345,6 +2446,16 @@ function renderWebview(webview, fileIconThemeSource) {
 
           tree.children.forEach(function (node) {
             appendTreeNode(fragment, node, 0);
+          });
+        }
+
+        if (ignoredFiles.length > 0) {
+          const ignoredTitle = document.createElement('div');
+          ignoredTitle.className = 'ignored-group';
+          ignoredTitle.textContent = 'Ignored Files ' + ignoredFiles.length;
+          fragment.appendChild(ignoredTitle);
+          ignoredFiles.forEach(function (change) {
+            fragment.appendChild(ignoredFileRow(change));
           });
         }
 
@@ -1446,7 +2557,8 @@ function renderWebview(webview, fileIconThemeSource) {
             path: change.path,
             change: change,
             fileCount: 1,
-            stagedCount: change.staged ? 1 : 0
+            stagedCount: change.staged && !change.partiallyStaged ? 1 : 0,
+            includedCount: change.staged ? 1 : 0
           });
         });
 
@@ -1462,13 +2574,15 @@ function renderWebview(webview, fileIconThemeSource) {
           folders: new Map(),
           children: [],
           fileCount: 0,
-          stagedCount: 0
+          stagedCount: 0,
+          includedCount: 0
         };
       }
 
       function finalizeFolder(node) {
         node.fileCount = 0;
         node.stagedCount = 0;
+        node.includedCount = 0;
 
         node.children.forEach(function (child) {
           if (child.type === 'folder') {
@@ -1477,6 +2591,7 @@ function renderWebview(webview, fileIconThemeSource) {
 
           node.fileCount += child.fileCount;
           node.stagedCount += child.stagedCount;
+          node.includedCount += child.includedCount;
         });
 
         node.children.sort(function (left, right) {
@@ -1512,11 +2627,11 @@ function renderWebview(webview, fileIconThemeSource) {
         const row = document.createElement('div');
         const expanded = isFolderExpanded(node);
         const allChecked = node.fileCount > 0 && node.stagedCount === node.fileCount;
-        const partiallyChecked = node.stagedCount > 0 && node.stagedCount < node.fileCount;
+        const partiallyChecked = !allChecked && node.includedCount > 0;
 
         row.className = 'tree-row folder-row';
         row.style.paddingLeft = treePadding(depth);
-        row.title = node.path + '\\n' + node.stagedCount + '/' + node.fileCount + ' checked';
+        row.title = node.path + '\\n' + node.includedCount + '/' + node.fileCount + ' checked';
 
         const disclosure = document.createElement('button');
         disclosure.className = 'disclosure-button ' + (expanded ? 'expanded' : 'collapsed');
@@ -1536,15 +2651,16 @@ function renderWebview(webview, fileIconThemeSource) {
         checkbox.disabled = Boolean(state.busy);
         checkbox.addEventListener('click', function (event) {
           event.stopPropagation();
-        });
-        checkbox.addEventListener('change', function (event) {
           const paths = collectFilePaths(node);
-          setLocalChecked(paths, event.target.checked);
-          vscode.postMessage({
-            type: 'toggleChanges',
-            paths: paths,
-            checked: event.target.checked
-          });
+          const checked = resolveFolderCheckboxChecked(
+            paths.length,
+            countFullyCheckedPaths(paths)
+          );
+
+          event.currentTarget.checked = checked;
+          event.currentTarget.indeterminate = false;
+          setLocalChecked(paths, checked);
+          queueStagingChanges(paths, checked);
         });
 
         const name = document.createElement('span');
@@ -1553,7 +2669,7 @@ function renderWebview(webview, fileIconThemeSource) {
 
         const count = document.createElement('span');
         count.className = 'folder-count';
-        count.textContent = node.stagedCount + '/' + node.fileCount;
+        count.textContent = node.includedCount + '/' + node.fileCount;
 
         const icon = createFolderIcon(node, expanded);
 
@@ -1585,18 +2701,15 @@ function renderWebview(webview, fileIconThemeSource) {
         const checkbox = document.createElement('input');
         checkbox.className = 'file-checkbox';
         checkbox.type = 'checkbox';
-        checkbox.checked = Boolean(change.staged);
+        checkbox.checked = Boolean(change.staged && !change.partiallyStaged);
+        checkbox.indeterminate = Boolean(change.partiallyStaged);
         checkbox.disabled = Boolean(state.busy);
         checkbox.addEventListener('click', function (event) {
           event.stopPropagation();
         });
         checkbox.addEventListener('change', function (event) {
           setLocalChecked([change.path], event.target.checked);
-          vscode.postMessage({
-            type: 'toggleChange',
-            path: change.path,
-            checked: event.target.checked
-          });
+          queueStagingChanges([change.path], event.target.checked);
         });
 
         const status = document.createElement('span');
@@ -1632,13 +2745,55 @@ function renderWebview(webview, fileIconThemeSource) {
         row.appendChild(main);
         row.appendChild(status);
         row.addEventListener('click', function () {
-          selectedPath = change.path;
-          renderChangesKeepingScroll();
+          selectPath(change.path);
         });
         row.addEventListener('dblclick', function () {
           vscode.postMessage({ type: 'openDiff', path: change.path });
         });
 
+        return row;
+      }
+
+      function ignoredFileRow(change) {
+        const row = document.createElement('div');
+        row.className = 'tree-row file-row ignored-row';
+        row.style.paddingLeft = treePadding(0);
+        row.title = change.path + '\\nIgnored by Git';
+
+        const spacer = document.createElement('span');
+        spacer.className = 'disclosure-spacer';
+        spacer.setAttribute('aria-hidden', 'true');
+
+        const checkbox = document.createElement('input');
+        checkbox.className = 'file-checkbox';
+        checkbox.type = 'checkbox';
+        checkbox.disabled = true;
+
+        const main = document.createElement('span');
+        main.className = 'file-main';
+        const name = document.createElement('span');
+        name.className = 'file-name';
+        name.textContent = baseName(change.path);
+        const directory = directoryName(change.path);
+        main.appendChild(name);
+
+        if (directory) {
+          const directoryNode = document.createElement('span');
+          directoryNode.className = 'file-directory';
+          directoryNode.textContent = directory;
+          main.appendChild(directoryNode);
+        }
+
+        const status = document.createElement('span');
+        status.className = 'status';
+        status.textContent = 'I';
+        status.title = 'Ignored by Git';
+
+        row.appendChild(spacer);
+        row.appendChild(checkbox);
+        row.appendChild(createFileIcon(change.path));
+        row.appendChild(main);
+        row.appendChild(status);
         return row;
       }
 
@@ -1665,6 +2820,133 @@ function renderWebview(webview, fileIconThemeSource) {
         return node.children.flatMap(collectFilePaths);
       }
 
+      function countFullyCheckedPaths(paths) {
+        const pathSet = new Set(paths);
+
+        return (state.changes || []).filter(function (change) {
+          return pathSet.has(change.path) && change.staged && !change.partiallyStaged;
+        }).length;
+      }
+
+      function queueStagingChanges(paths, checked) {
+        const requestId = pendingStagingRequestId || nextStagingRequestId();
+        pendingStagingRequestId = requestId;
+
+        uniquePaths(paths).forEach(function (filePath) {
+          pendingStagingStates.set(filePath, Boolean(checked));
+          optimisticStagingStates.set(filePath, {
+            checked: Boolean(checked),
+            requestId: requestId
+          });
+        });
+
+        scheduleStagingDebounce();
+      }
+
+      function nextStagingRequestId() {
+        stagingRequestSequence += 1;
+        return stagingRequestSession + '-' + stagingRequestSequence;
+      }
+
+      function scheduleStagingDebounce() {
+        if (stagingDebounceTimer) {
+          window.clearTimeout(stagingDebounceTimer);
+        }
+
+        stagingDebounceTimer = window.setTimeout(function () {
+          stagingDebounceTimer = 0;
+          flushPendingStagingChanges();
+        }, stagingDebounceDelayMs);
+      }
+
+      function flushPendingStagingChanges() {
+        const requestId = pendingStagingRequestId;
+        const changes = Array.from(pendingStagingStates.entries()).map(
+          function ([path, checked]) {
+            return { path: path, checked: checked };
+          }
+        );
+
+        if (stagingDebounceTimer) {
+          window.clearTimeout(stagingDebounceTimer);
+          stagingDebounceTimer = 0;
+        }
+
+        pendingStagingStates.clear();
+        pendingStagingRequestId = '';
+
+        if (!requestId || changes.length === 0) {
+          return;
+        }
+
+        vscode.postMessage({
+          type: 'applyStagingBatch',
+          requestId: requestId,
+          changes: changes
+        });
+      }
+
+      function clearPendingStagingChanges() {
+        if (stagingDebounceTimer) {
+          window.clearTimeout(stagingDebounceTimer);
+          stagingDebounceTimer = 0;
+        }
+
+        pendingStagingStates.clear();
+        pendingStagingRequestId = '';
+      }
+
+      function applyOptimisticStagingOverlay(nextState) {
+        if (optimisticStagingStates.size === 0 || nextState.errorText) {
+          if (nextState.errorText) {
+            optimisticStagingStates.clear();
+            clearPendingStagingChanges();
+          }
+
+          return nextState;
+        }
+
+        const reconciliation = reconcileOptimisticStagingChanges(
+          nextState.changes,
+          optimisticStagingStates,
+          nextState.confirmedStagingRequestIds
+        );
+        optimisticStagingStates.clear();
+        reconciliation.optimisticStagingStates.forEach(function (optimisticState, filePath) {
+          optimisticStagingStates.set(filePath, optimisticState);
+        });
+
+        if (!reconciliation.hasOverlay) {
+          return nextState;
+        }
+
+        const changes = reconciliation.changes;
+        const stagedCount = changes.filter(function (change) { return change.staged; }).length;
+
+        return Object.assign({}, nextState, {
+          changes: changes,
+          stagedCount: stagedCount,
+          totalCount: changes.length,
+          canGenerate: stagedCount > 0,
+          statusText: changeSummaryFromCounts(stagedCount, changes.length)
+        });
+      }
+
+      function uniquePaths(paths) {
+        return Array.from(new Set((paths || []).map(function (filePath) {
+          return String(filePath || '');
+        }).filter(Boolean)));
+      }
+
+      function localCheckedChange(change, checked) {
+        return Object.assign({}, change, {
+          staged: checked,
+          hasStaged: checked,
+          hasUnstaged: !checked,
+          partiallyStaged: false
+        });
+      }
+
       function setLocalChecked(paths, checked) {
         const pathSet = new Set(paths);
         const changes = (state.changes || []).map(function (change) {
@@ -1672,14 +2954,22 @@ function renderWebview(webview, fileIconThemeSource) {
             return change;
           }
 
-          return Object.assign({}, change, {
-            staged: checked
-          });
+          return localCheckedChange(change, checked);
         });
         const stagedCount = changes.filter(function (change) { return change.staged; }).length;
 
         state = Object.assign({}, state, {
           changes: changes,
+          diffPreview: state.diffPreview && pathSet.has(selectedPath)
+            ? Object.assign({}, state.diffPreview, {
+              fileIncluded: checked,
+              filePartiallyIncluded: false,
+              hunks: (state.diffPreview.hunks || []).map(function (hunk) {
+                return Object.assign({}, hunk, { included: checked });
+              }),
+              includedCount: checked ? (state.diffPreview.hunks || []).length : 0
+            })
+            : state.diffPreview,
           stagedCount: stagedCount,
           totalCount: changes.length,
           canGenerate: stagedCount > 0,
@@ -1687,8 +2977,7 @@ function renderWebview(webview, fileIconThemeSource) {
           errorText: ''
         });
 
-        renderChangesKeepingScroll();
-        renderCommitPanel();
+        scheduleLocalRender();
       }
 
       function treePadding(depth) {
@@ -1715,6 +3004,9 @@ function renderWebview(webview, fileIconThemeSource) {
         const hasMessage = textarea.value.trim().length > 0;
         const hasRepo = Boolean(state.selectedRoot);
         const hasChanges = (state.totalCount || 0) > 0;
+        const selectedChange = (state.changes || []).find(function (change) {
+          return change.path === selectedPath;
+        });
         const hasFolders = viewMode === 'directory' && hasChanges && collectFolderPaths().length > 0;
         elements.commit.disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements['commit-push'].disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
@@ -1722,8 +3014,15 @@ function renderWebview(webview, fileIconThemeSource) {
         elements['commit-language'].disabled = Boolean(state.busy);
         elements['stage-all'].disabled = Boolean(state.busy) || !hasRepo || !hasChanges;
         elements['unstage-all'].disabled = Boolean(state.busy) || !hasRepo || state.stagedCount === 0;
-        elements['view-mode-toggle'].disabled = !hasRepo || !hasChanges;
-        elements['group-menu'].disabled = !hasRepo;
+        elements['rollback-selected'].disabled = Boolean(state.busy)
+          || !selectedChange
+          || selectedChange.untracked
+          || selectedChange.kind === 'added';
+        elements['shelve-selected'].disabled = Boolean(state.busy) || !selectedChange;
+        elements['view-options'].disabled = !hasRepo;
+        elements['diff-preview-toggle'].disabled = !hasRepo || !hasChanges;
+        elements['open-selected-diff'].disabled = !hasRepo || !selectedPath;
+        elements['locate-active-file'].disabled = !hasRepo;
         elements['expand-all'].disabled = !hasFolders;
         elements['collapse-all'].disabled = !hasFolders;
         renderViewModeControls();
@@ -1732,18 +3031,411 @@ function renderWebview(webview, fileIconThemeSource) {
         elements['footer-status'].classList.toggle('error', Boolean(state.errorText));
       }
 
+      function renderDiffPreview() {
+        applyPreviewLayout();
+        renderDiffSettings();
+
+        if (!diffPreviewVisible) {
+          return;
+        }
+
+        const preview = state.diffPreview;
+        const content = elements['diff-content'];
+        const differences = preview?.differenceCount || 0;
+        const included = preview?.includedCount || 0;
+        const hasSelection = Boolean(selectedPath);
+        elements['diff-stats'].textContent = differences
+          + (differences === 1 ? ' difference, ' : ' differences, ')
+          + included
+          + ' included';
+        elements['diff-revision'].textContent = String(state.lastCommit || '').split(' ')[0] || 'HEAD';
+        elements['diff-path'].textContent = selectedPath || 'Select a changed file';
+        elements['diff-pathbar'].hidden = !showBreadcrumbs;
+        elements['diff-file-checkbox'].checked = Boolean(preview?.fileIncluded);
+        elements['diff-file-checkbox'].indeterminate = Boolean(preview?.filePartiallyIncluded);
+        elements['diff-file-checkbox'].disabled = Boolean(state.busy)
+          || !preview?.canToggleFile
+          || !hasSelection;
+        elements['diff-prev-file'].disabled = (state.changes || []).length < 2;
+        elements['diff-next-file'].disabled = (state.changes || []).length < 2;
+        elements['diff-edit-source'].disabled = !hasSelection;
+        elements['diff-open-native'].disabled = !hasSelection;
+        elements['diff-prev-change'].disabled = differences === 0;
+        elements['diff-next-change'].disabled = differences === 0;
+        elements['diff-viewer'].value = diffViewer;
+        elements['diff-ignore-policy'].value = diffIgnorePolicy;
+        elements['diff-highlight-policy'].value = diffHighlightPolicy;
+        elements['diff-collapse-unchanged'].classList.toggle('active', collapseUnchanged);
+        elements['diff-collapse-unchanged'].setAttribute('aria-pressed', collapseUnchanged ? 'true' : 'false');
+        elements['diff-body'].className = 'diff-body highlight-' + diffHighlightPolicy + (softWrap ? ' soft-wrap' : '');
+        content.replaceChildren();
+
+        if (state.diffLoading) {
+          content.appendChild(diffEmpty('Loading differences...'));
+          return;
+        }
+
+        if (!preview) {
+          content.appendChild(diffEmpty(hasSelection
+            ? 'Loading differences...'
+            : 'Select a changed file to preview it.'));
+          return;
+        }
+
+        if (!Array.isArray(preview.hunks) || preview.hunks.length === 0) {
+          content.appendChild(diffEmpty(preview.message || 'No textual differences.'));
+          return;
+        }
+
+        activeHunkIndex = clamp(activeHunkIndex, 0, preview.hunks.length - 1);
+        preview.hunks.forEach(function (hunk, index) {
+          content.appendChild(renderDiffHunk(hunk, index, preview));
+        });
+      }
+
+      function renderDiffHunk(hunk, index, preview) {
+        const section = document.createElement('section');
+        section.className = 'diff-hunk' + (index === activeHunkIndex ? ' active' : '');
+        section.dataset.hunkIndex = String(index);
+
+        const header = document.createElement('div');
+        header.className = 'diff-hunk-header' + (hunk.included ? ' included' : '');
+        const checkbox = document.createElement('input');
+        checkbox.className = 'file-checkbox';
+        checkbox.type = 'checkbox';
+        checkbox.checked = Boolean(hunk.included);
+        checkbox.disabled = Boolean(state.busy)
+          || !preview.canToggleHunks
+          || hunk.canToggle === false;
+        checkbox.title = hunk.included ? 'Exclude this difference from commit' : 'Include this difference in commit';
+        checkbox.addEventListener('change', function (event) {
+          vscode.postMessage({
+            type: 'toggleHunk',
+            path: selectedPath,
+            hunkId: hunk.id,
+            checked: event.target.checked
+          });
+        });
+
+        const title = document.createElement('span');
+        title.textContent = hunk.header || 'Changed fragment';
+        const source = document.createElement('span');
+        source.className = 'diff-hunk-source';
+        source.textContent = hunk.included ? 'Included changes' : 'Not included';
+        header.appendChild(checkbox);
+        header.appendChild(title);
+        header.appendChild(source);
+        section.appendChild(header);
+
+        const lines = collapseUnchanged ? collapseContextLines(hunk.lines || []) : hunk.lines || [];
+
+        if (diffViewer === 'side-by-side') {
+          pairSideBySideLines(lines).forEach(function (pair) {
+            section.appendChild(renderSideBySideRow(pair, preview));
+          });
+        } else {
+          lines.forEach(function (line) {
+            section.appendChild(renderUnifiedDiffRow(line, preview));
+          });
+        }
+
+        return section;
+      }
+
+      function renderUnifiedDiffRow(line, preview) {
+        if (line.type === 'omitted') {
+          return omittedDiffRow(line.count);
+        }
+
+        const row = document.createElement('div');
+        row.className = 'diff-row ' + line.type + (showLineNumbers ? '' : ' hide-line-numbers');
+
+        if (showLineNumbers) {
+          row.appendChild(diffLineNumber(line.oldLine));
+          row.appendChild(diffLineNumber(line.newLine));
+        }
+
+        const code = document.createElement('span');
+        code.className = 'diff-code';
+        appendDiffCode(code, line, preview);
+        row.appendChild(code);
+        return row;
+      }
+
+      function renderSideBySideRow(pair, preview) {
+        if (pair.omitted) {
+          return omittedDiffRow(pair.count);
+        }
+
+        const row = document.createElement('div');
+        row.className = 'diff-row side-by-side';
+        row.appendChild(renderDiffSide(pair.left, preview, 'left'));
+        row.appendChild(renderDiffSide(pair.right, preview, 'right'));
+        return row;
+      }
+
+      function renderDiffSide(line, preview, sideName) {
+        const side = document.createElement('div');
+        side.className = 'diff-side ' + (line?.type || 'context') + (showLineNumbers ? '' : ' hide-line-numbers');
+
+        if (showLineNumbers) {
+          side.appendChild(diffLineNumber(line
+            ? sideName === 'left' ? line.oldLine : line.newLine
+            : null));
+        }
+
+        const code = document.createElement('span');
+        code.className = 'diff-code';
+
+        if (line) {
+          appendDiffCode(code, line, preview);
+        }
+
+        side.appendChild(code);
+        return side;
+      }
+
+      function appendDiffCode(container, line, preview) {
+        if (showBlame && line.newLine && preview.blame?.[line.newLine]) {
+          const blame = document.createElement('span');
+          blame.className = 'diff-blame';
+          blame.textContent = preview.blame[line.newLine];
+          blame.title = preview.blame[line.newLine];
+          container.appendChild(blame);
+        }
+
+        const text = visibleWhitespace(line.text || '');
+        if ((line.type === 'add' || line.type === 'delete')
+          && ['word', 'word-split', 'char'].includes(diffHighlightPolicy)) {
+          appendHighlightedSegments(container, text, line.type);
+        } else {
+          appendIndentAwareText(container, text);
+        }
+      }
+
+      function appendHighlightedSegments(container, text, lineType) {
+        const pattern = diffHighlightPolicy === 'char'
+          ? /([\\s\\S])/g
+          : diffHighlightPolicy === 'word-split'
+            ? /(\\s+|[A-Za-z0-9_$]+|.)/g
+            : /(\\s+|\\S+)/g;
+        const segments = String(text).match(pattern) || [];
+
+        segments.forEach(function (segment) {
+          if (/^\\s+$/.test(segment)) {
+            container.appendChild(document.createTextNode(segment));
+            return;
+          }
+
+          const mark = document.createElement('span');
+          mark.className = 'diff-mark ' + lineType;
+          appendSyntaxText(mark, segment);
+          container.appendChild(mark);
+        });
+      }
+
+      function appendIndentAwareText(container, text) {
+        const match = /^[ \\t]+/.exec(text);
+
+        if (!match) {
+          appendSyntaxText(container, text);
+          return;
+        }
+
+        const indentation = match[0];
+        const rest = text.slice(indentation.length);
+
+        if (showIndentGuides) {
+          const chunks = indentation.match(/(?: {1,2}|\\t)/g) || [indentation];
+          chunks.forEach(function (chunk) {
+            const guide = document.createElement('span');
+            guide.className = 'indent-guide';
+            guide.textContent = chunk;
+            container.appendChild(guide);
+          });
+        } else {
+          container.appendChild(document.createTextNode(indentation));
+        }
+
+        appendSyntaxText(container, rest);
+      }
+
+      function appendSyntaxText(container, text) {
+        const tokenPattern = /(\\/\\/.*$|#.*$|\\/\\*.*?\\*\\/|'(?:\\\\.|[^'])*'|"(?:\\\\.|[^"])*"|\\$[A-Za-z_][A-Za-z0-9_]*|\\b(?:class|function|public|private|protected|static|return|if|else|for|foreach|while|new|const|let|var|async|await|throw|try|catch|true|false|null)\\b|\\b\\d+(?:\\.\\d+)?\\b)/gm;
+        let cursor = 0;
+        let match;
+
+        while ((match = tokenPattern.exec(text))) {
+          if (match.index > cursor) {
+            container.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+          }
+
+          const token = document.createElement('span');
+          token.className = tokenClass(match[0]);
+          token.textContent = match[0];
+          container.appendChild(token);
+          cursor = match.index + match[0].length;
+        }
+
+        if (cursor < text.length) {
+          container.appendChild(document.createTextNode(text.slice(cursor)));
+        }
+      }
+
+      function tokenClass(token) {
+        if (token.startsWith('//') || token.startsWith('#') || token.startsWith('/*')) {
+          return 'tok-comment';
+        }
+        if (token.startsWith("'") || token.startsWith('"')) {
+          return 'tok-string';
+        }
+        if (token.startsWith('$')) {
+          return 'tok-variable';
+        }
+        if (/^\\d/.test(token)) {
+          return 'tok-number';
+        }
+        return 'tok-keyword';
+      }
+
+      function visibleWhitespace(text) {
+        if (!showWhitespace) {
+          return text;
+        }
+
+        return String(text).replace(/ /g, '\\u00b7').replace(/\\t/g, '\\u2192   ');
+      }
+
+      function diffLineNumber(value) {
+        const number = document.createElement('span');
+        number.className = 'diff-line-number';
+        number.textContent = value == null ? '' : String(value);
+        return number;
+      }
+
+      function collapseContextLines(lines) {
+        const result = [];
+        let index = 0;
+
+        while (index < lines.length) {
+          if (lines[index].type !== 'context') {
+            result.push(lines[index]);
+            index += 1;
+            continue;
+          }
+
+          let end = index;
+          while (end < lines.length && lines[end].type === 'context') {
+            end += 1;
+          }
+          const run = lines.slice(index, end);
+
+          if (run.length > 2) {
+            result.push(run[0]);
+            result.push({ type: 'omitted', count: run.length - 2 });
+            result.push(run[run.length - 1]);
+          } else {
+            result.push(...run);
+          }
+
+          index = end;
+        }
+
+        return result;
+      }
+
+      function pairSideBySideLines(lines) {
+        const pairs = [];
+        let index = 0;
+
+        while (index < lines.length) {
+          const line = lines[index];
+
+          if (line.type === 'omitted') {
+            pairs.push({ omitted: true, count: line.count });
+            index += 1;
+            continue;
+          }
+
+          if (line.type === 'delete') {
+            const deleted = [];
+            const added = [];
+            while (index < lines.length && lines[index].type === 'delete') {
+              deleted.push(lines[index]);
+              index += 1;
+            }
+            while (index < lines.length && lines[index].type === 'add') {
+              added.push(lines[index]);
+              index += 1;
+            }
+            const length = Math.max(deleted.length, added.length);
+            for (let pairIndex = 0; pairIndex < length; pairIndex += 1) {
+              pairs.push({ left: deleted[pairIndex], right: added[pairIndex] });
+            }
+            continue;
+          }
+
+          if (line.type === 'add') {
+            pairs.push({ left: undefined, right: line });
+          } else {
+            pairs.push({ left: line, right: line });
+          }
+          index += 1;
+        }
+
+        return pairs;
+      }
+
+      function omittedDiffRow(count) {
+        const row = document.createElement('div');
+        row.className = 'diff-omitted';
+        row.textContent = count + (count === 1 ? ' unchanged line' : ' unchanged lines');
+        return row;
+      }
+
+      function diffEmpty(message) {
+        const node = document.createElement('div');
+        node.className = 'diff-empty';
+        node.textContent = message;
+        return node;
+      }
+
+      function moveToHunk(direction) {
+        const hunks = Array.from(elements['diff-content'].querySelectorAll('.diff-hunk'));
+
+        if (hunks.length === 0) {
+          return;
+        }
+
+        activeHunkIndex = (activeHunkIndex + direction + hunks.length) % hunks.length;
+        hunks.forEach(function (hunk, index) {
+          hunk.classList.toggle('active', index === activeHunkIndex);
+        });
+        hunks[activeHunkIndex].scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+
+      function renderDiffSettings() {
+        setMenuCheck('diff-show-blame', showBlame);
+        setMenuCheck('diff-show-whitespace', showWhitespace);
+        setMenuCheck('diff-show-line-numbers', showLineNumbers);
+        setMenuCheck('diff-show-indent-guides', showIndentGuides);
+        setMenuCheck('diff-soft-wrap', softWrap);
+        setMenuCheck('diff-breadcrumbs', showBreadcrumbs);
+      }
+
+      function setMenuCheck(elementId, checked) {
+        const element = elements[elementId];
+        element.classList.toggle('selected', checked);
+        element.setAttribute('aria-checked', checked ? 'true' : 'false');
+        element.querySelector('.menu-check').textContent = checked ? '\\u2713' : '';
+      }
+
       function normalizeCommitLanguage(language) {
         return ['auto', 'en', 'ru'].includes(language) ? language : 'auto';
       }
 
       function renderViewModeControls() {
         const isDirectory = viewMode === 'directory';
-        const toggle = elements['view-mode-toggle'];
-        toggle.classList.toggle('active', isDirectory);
-        toggle.setAttribute('aria-pressed', isDirectory ? 'true' : 'false');
-        toggle.title = isDirectory
-          ? 'Directory view. Click to show flat list'
-          : 'Flat list. Click to group by directory';
 
         elements['group-directory'].classList.toggle('selected', isDirectory);
         elements['group-directory'].setAttribute('aria-checked', isDirectory ? 'true' : 'false');
@@ -1752,6 +3444,10 @@ function renderWebview(webview, fileIconThemeSource) {
         elements['group-flat'].classList.toggle('selected', !isDirectory);
         elements['group-flat'].setAttribute('aria-checked', isDirectory ? 'false' : 'true');
         elements['group-flat'].querySelector('.menu-check').textContent = isDirectory ? '' : '\\u2713';
+
+        elements['show-ignored'].classList.toggle('selected', showIgnored);
+        elements['show-ignored'].setAttribute('aria-checked', showIgnored ? 'true' : 'false');
+        elements['show-ignored'].querySelector('.menu-check').textContent = showIgnored ? '\\u2713' : '';
       }
 
       function changeSummary() {
@@ -2163,6 +3859,55 @@ function buildFileIconTheme(webview, themeSource) {
   };
 }
 
+function buildBundledActionIcons(webview, extensionUri) {
+  const empty = {
+    show: { light: '', dark: '' },
+    previewDetails: { light: '', dark: '' }
+  };
+
+  if (!extensionUri || !webview || typeof webview.asWebviewUri !== 'function') {
+    return empty;
+  }
+
+  const iconUri = (fileName) => String(webview.asWebviewUri(resourceUri(
+    extensionUri,
+    ['resources', 'jetbrains', fileName]
+  )));
+
+  return {
+    show: {
+      light: iconUri('actions-show.svg'),
+      dark: iconUri('actions-show-dark.svg')
+    },
+    previewDetails: {
+      light: iconUri('actions-preview-details.svg'),
+      dark: iconUri('actions-preview-details-dark.svg')
+    }
+  };
+}
+
+function renderActionIcon(icon, altText) {
+  if (!icon?.light || !icon?.dark) {
+    return '';
+  }
+
+  const alt = escapeHtmlAttribute(altText || '');
+
+  return [
+    `<img class="jetbrains-action-icon light" src="${escapeHtmlAttribute(icon.light)}" alt="${alt}">`,
+    `<img class="jetbrains-action-icon dark" src="${escapeHtmlAttribute(icon.dark)}" alt="${alt}">`
+  ].join('');
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function resourceUri(extensionUri, relativeParts) {
   const vscode = getVscodeModule();
 
@@ -2230,6 +3975,8 @@ function getVscodeModule() {
 
 module.exports = {
   buildFileIconTheme,
+  reconcileOptimisticStagingChanges,
   renderWebview,
-  resolveActiveFileIconTheme
+  resolveActiveFileIconTheme,
+  resolveFolderCheckboxChecked
 };
