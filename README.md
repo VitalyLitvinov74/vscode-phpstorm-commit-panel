@@ -18,6 +18,7 @@ This VS Code extension adds a separate Activity Bar view with a split commit wor
 - `Commit` and `Commit and Push...` buttons inside the panel.
 - `Amend` support for updating the previous commit.
 - AI commit message generation through the VS Code Language Model API, with a panel language selector for Auto, English, or Russian output.
+- Disables VS Code accessibility signal sounds for this host so opening and clicking diff lines stays silent.
 - Works with local and remote VS Code extension hosts, including WSL, when installed in that host.
 
 ## Why this exists

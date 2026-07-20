@@ -9,6 +9,47 @@ const VIEW_ID = 'phpstormGitPanel.changes';
 const VIRTUAL_SCHEME = 'phpstorm-git-panel';
 const COMMIT_LANGUAGE_STORAGE_KEY = 'commitLanguage';
 const COMMIT_LANGUAGE_OPTIONS = new Set(['auto', 'en', 'ru']);
+const DISABLED_SOUND_SETTINGS = [
+  ['accessibility.signalOptions.volume', 0],
+  ['accessibility.signals.sound', 'never'],
+  ['accessibility.signals.chatEditModifiedFile.sound', 'never'],
+  ['accessibility.signals.chatRequestSent.sound', 'never'],
+  ['accessibility.signals.chatResponseReceived.sound', 'never'],
+  ['accessibility.signals.chatUserActionRequired.sound', 'never'],
+  ['accessibility.signals.clear.sound', 'never'],
+  ['accessibility.signals.codeActionApplied.sound', 'never'],
+  ['accessibility.signals.codeActionTriggered.sound', 'never'],
+  ['accessibility.signals.diffLineDeleted.sound', 'never'],
+  ['accessibility.signals.diffLineModified.sound', 'never'],
+  ['accessibility.signals.editsKept.sound', 'never'],
+  ['accessibility.signals.editsUndone.sound', 'never'],
+  ['accessibility.signals.format.sound', 'never'],
+  ['accessibility.signals.lineHasBreakpoint.sound', 'never'],
+  ['accessibility.signals.lineHasError.sound', 'never'],
+  ['accessibility.signals.lineHasFoldedArea.sound', 'never'],
+  ['accessibility.signals.lineHasInlineSuggestion.sound', 'never'],
+  ['accessibility.signals.lineHasWarning.sound', 'never'],
+  ['accessibility.signals.nextEditSuggestion.sound', 'never'],
+  ['accessibility.signals.noInlayHints.sound', 'never'],
+  ['accessibility.signals.notebookCellCompleted.sound', 'never'],
+  ['accessibility.signals.notebookCellFailed.sound', 'never'],
+  ['accessibility.signals.onDebugBreak.sound', 'never'],
+  ['accessibility.signals.positionHasError.sound', 'never'],
+  ['accessibility.signals.positionHasWarning.sound', 'never'],
+  ['accessibility.signals.progress.sound', 'never'],
+  ['accessibility.signals.save.sound', 'never'],
+  ['accessibility.signals.taskCompleted.sound', 'never'],
+  ['accessibility.signals.taskFailed.sound', 'never'],
+  ['accessibility.signals.terminalBell.sound', 'never'],
+  ['accessibility.signals.terminalCommandFailed.sound', 'never'],
+  ['accessibility.signals.terminalCommandSucceeded.sound', 'never'],
+  ['accessibility.signals.terminalQuickFix.sound', 'never'],
+  ['accessibility.signals.voiceRecordingStarted.sound', 'never'],
+  ['accessibility.signals.voiceRecordingStopped.sound', 'never'],
+  ['terminal.integrated.enableBell', false]
+];
+
+let editorSoundsDisabledPromise;
 
 class PhpStormCommitPanelProvider {
   constructor(context) {
@@ -459,6 +500,8 @@ class PhpStormCommitPanelProvider {
       return;
     }
 
+    await ensureEditorSoundsDisabled();
+
     const leftPath = change.originalPath ?? change.path;
     const left = createVirtualUri({
       root,
@@ -769,7 +812,37 @@ function formatError(error) {
   return `PhpStorm Git Panel: ${details.trim()}`;
 }
 
+function ensureEditorSoundsDisabled() {
+  if (!editorSoundsDisabledPromise) {
+    editorSoundsDisabledPromise = disableEditorSounds();
+  }
+
+  return editorSoundsDisabledPromise;
+}
+
+async function disableEditorSounds() {
+  const configuration = vscode.workspace.getConfiguration();
+
+  for (const [key, value] of DISABLED_SOUND_SETTINGS) {
+    try {
+      if (isSameSettingValue(configuration.get(key), value)) {
+        continue;
+      }
+
+      await configuration.update(key, value, vscode.ConfigurationTarget.Global);
+    } catch (_) {
+      // Ignore settings that are unavailable or policy-controlled in this VS Code host.
+    }
+  }
+}
+
+function isSameSettingValue(currentValue, expectedValue) {
+  return JSON.stringify(currentValue) === JSON.stringify(expectedValue);
+}
+
 function activate(context) {
+  void ensureEditorSoundsDisabled();
+
   const provider = new PhpStormCommitPanelProvider(context);
   const virtualDocuments = new GitVirtualDocumentProvider();
 
@@ -818,6 +891,8 @@ module.exports = {
   activate,
   deactivate,
   formatCommitLanguageInstruction,
+  disableEditorSounds,
+  ensureEditorSoundsDisabled,
   normalizeCommitLanguage,
   PhpStormCommitPanelProvider,
   sanitizeGeneratedCommitMessage

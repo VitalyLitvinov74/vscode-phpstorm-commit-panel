@@ -270,6 +270,35 @@ function run() {
     /vscode\.window\.show(?:Error|Warning|Information)Message/,
     'extension must not use VS Code notification popups because they can play notification sounds'
   );
+  assert.ok(
+    extensionSource.includes("['accessibility.signals.sound', 'never']"),
+    'extension must disable VS Code accessibility signal sounds globally'
+  );
+  assert.ok(
+    extensionSource.includes("['accessibility.signals.diffLineDeleted.sound', 'never']"),
+    'extension must disable diff deleted-line sounds'
+  );
+  assert.ok(
+    extensionSource.includes("['accessibility.signals.diffLineModified.sound', 'never']"),
+    'extension must disable diff modified-line sounds'
+  );
+  assert.ok(
+    extensionSource.includes("['accessibility.signalOptions.volume', 0]"),
+    'extension must force VS Code signal volume to zero'
+  );
+  assert.ok(
+    extensionSource.includes("['terminal.integrated.enableBell', false]"),
+    'extension must also disable the integrated terminal bell'
+  );
+  assert.ok(
+    extensionSource.includes('vscode.ConfigurationTarget.Global'),
+    'sound settings must be written to the current VS Code host global settings'
+  );
+  assert.match(
+    extensionSource,
+    /async openDiff\(change\)[\s\S]*?await ensureEditorSoundsDisabled\(\);[\s\S]*?'vscode\.diff'/,
+    'diff opening must ensure editor sounds are disabled before showing the diff editor'
+  );
   assert.deepEqual(
     manifest.extensionKind,
     ['workspace'],
