@@ -168,6 +168,36 @@ function run() {
   );
   assert.match(
     html,
+    /function captureChangesListScrollTop\(\)/,
+    'changes list rerenders must capture the current scroll position'
+  );
+  assert.match(
+    html,
+    /function restoreChangesListScrollTop\(scrollTop, selectedRoot\)/,
+    'changes list rerenders must restore the captured scroll position'
+  );
+  assert.match(
+    html,
+    /window\.requestAnimationFrame\(restore\)/,
+    'changes list scroll restoration must survive browser layout updates after rerender'
+  );
+  assert.match(
+    html,
+    /render\(\{ changesScrollTop: scrollTop \}\)/,
+    'incoming state updates for the same repository must keep the changes list scroll position'
+  );
+  assert.match(
+    html,
+    /function renderChangesKeepingScroll\(\)[\s\S]*?scrollTop: captureChangesListScrollTop\(\)/,
+    'local changes list rerenders must preserve scrollTop'
+  );
+  assert.match(
+    html,
+    /function setLocalChecked\(paths, checked\)[\s\S]*?renderChangesKeepingScroll\(\);/,
+    'checkbox staging must not jump the changes list back to the top'
+  );
+  assert.match(
+    html,
     /const layoutVersion = 3;/,
     'layout version must reset old persisted pane widths'
   );

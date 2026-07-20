@@ -957,11 +957,18 @@ function renderWebview(webview, fileIconThemeSource) {
         ? persisted.collapsedFolders
         : []);
       let dragStart = null;
+      let lastRenderedChangesRoot = '';
 
       window.addEventListener('message', function (event) {
         if (event.data && event.data.type === 'state') {
-          state = event.data.state || state;
-          render();
+          const nextState = event.data.state || state;
+          const shouldKeepScroll = Boolean(state.selectedRoot)
+            && state.selectedRoot === nextState.selectedRoot
+            && elements['changes-list'];
+          const scrollTop = shouldKeepScroll ? captureChangesListScrollTop() : null;
+
+          state = nextState;
+          render({ changesScrollTop: scrollTop });
         }
       });
 
@@ -1202,9 +1209,11 @@ function renderWebview(webview, fileIconThemeSource) {
         return Math.min(Math.max(value, min), max);
       }
 
-      function render() {
+      function render(options) {
         renderRepositories();
-        renderChanges();
+        renderChanges({
+          scrollTop: options ? options.changesScrollTop : null
+        });
         renderCommitPanel();
       }
 
@@ -1281,23 +1290,40 @@ function renderWebview(webview, fileIconThemeSource) {
         });
       }
 
-      function renderChanges() {
+      function renderChanges(options) {
+        renderChangesWithScroll(options);
+      }
+
+      function renderChangesKeepingScroll() {
+        renderChangesWithScroll({
+          scrollTop: captureChangesListScrollTop()
+        });
+      }
+
+      function renderChangesWithScroll(options) {
+        const selectedRoot = state.selectedRoot || '';
+        const scrollTop = options && Number.isFinite(options.scrollTop)
+          ? options.scrollTop
+          : null;
         elements['changes-count'].textContent = String(state.totalCount || 0);
         elements['changes-summary'].textContent = state.busy
           ? 'updating...'
           : changeSummary();
         elements['changes-list'].replaceChildren();
+        lastRenderedChangesRoot = selectedRoot;
 
         const changes = state.changes || [];
         if (!state.selectedRoot) {
           elements['changes-list'].appendChild(empty('No Git repository', 'Open a folder that contains a Git repository.'));
           selectedPath = '';
+          restoreChangesListScrollTop(scrollTop, selectedRoot);
           return;
         }
 
         if (changes.length === 0) {
           elements['changes-list'].appendChild(empty('No local changes', 'Edit files in this repository. Checked files will be staged automatically.'));
           selectedPath = '';
+          restoreChangesListScrollTop(scrollTop, selectedRoot);
           return;
         }
 
@@ -1323,6 +1349,34 @@ function renderWebview(webview, fileIconThemeSource) {
         }
 
         elements['changes-list'].appendChild(fragment);
+        restoreChangesListScrollTop(scrollTop, selectedRoot);
+      }
+
+      function captureChangesListScrollTop() {
+        if (!elements['changes-list']) {
+          return 0;
+        }
+
+        return elements['changes-list'].scrollTop;
+      }
+
+      function restoreChangesListScrollTop(scrollTop, selectedRoot) {
+        if (!Number.isFinite(scrollTop) || lastRenderedChangesRoot !== selectedRoot) {
+          return;
+        }
+
+        const restore = function () {
+          if (lastRenderedChangesRoot !== selectedRoot || !elements['changes-list']) {
+            return;
+          }
+
+          const list = elements['changes-list'];
+          const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+          list.scrollTop = Math.min(scrollTop, maxScrollTop);
+        };
+
+        restore();
+        window.requestAnimationFrame(restore);
       }
 
       function expandAllFolders() {
@@ -1579,7 +1633,7 @@ function renderWebview(webview, fileIconThemeSource) {
         row.appendChild(status);
         row.addEventListener('click', function () {
           selectedPath = change.path;
-          renderChanges();
+          renderChangesKeepingScroll();
         });
         row.addEventListener('dblclick', function () {
           vscode.postMessage({ type: 'openDiff', path: change.path });
@@ -1633,7 +1687,7 @@ function renderWebview(webview, fileIconThemeSource) {
           errorText: ''
         });
 
-        renderChanges();
+        renderChangesKeepingScroll();
         renderCommitPanel();
       }
 
