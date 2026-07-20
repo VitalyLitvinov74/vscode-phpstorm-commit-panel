@@ -392,7 +392,7 @@ function renderWebview(webview) {
 
     .tree-row {
       display: grid;
-      grid-template-columns: 18px 16px minmax(0, 1fr) 30px;
+      grid-template-columns: 18px 16px 16px minmax(0, 1fr) 30px;
       align-items: center;
       gap: 4px;
       min-height: 22px;
@@ -453,6 +453,62 @@ function renderWebview(webview) {
     .tree-row:hover .disclosure-button,
     .tree-row.selected .disclosure-button {
       color: currentColor;
+    }
+
+    .entry-icon {
+      width: 16px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+      pointer-events: none;
+    }
+
+    .entry-icon svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.45;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .folder-icon {
+      color: var(--vscode-symbolIcon-folderForeground, #dcb67a);
+    }
+
+    .file-icon {
+      color: var(--vscode-symbolIcon-fileForeground, color-mix(in srgb, var(--muted) 90%, var(--text) 10%));
+    }
+
+    .file-icon-php {
+      color: #8b9ad9;
+    }
+
+    .file-icon-yaml,
+    .file-icon-json,
+    .file-icon-env {
+      color: #d7ba7d;
+    }
+
+    .file-icon-docker {
+      color: #2496ed;
+    }
+
+    .file-icon-csharp {
+      color: #b180d7;
+    }
+
+    .file-icon-js,
+    .file-icon-ts {
+      color: #dcdc6b;
+    }
+
+    .file-icon-md {
+      color: #6caee8;
     }
 
     .file-checkbox,
@@ -577,9 +633,22 @@ function renderWebview(webview) {
     }
 
     .file-name {
+      min-width: 0;
+      flex: 0 1 auto;
       overflow: hidden;
       color: inherit;
       font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-directory {
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -775,7 +844,12 @@ function renderWebview(webview) {
         </div>
         <span class="tool-separator" aria-hidden="true"></span>
         <div class="toolbar-group" aria-label="View actions">
-          <button id="open-selected" class="tool-button active" title="Open selected change diff">&#x25C9;</button>
+          <button id="view-mode-toggle" class="tool-button view-mode-toggle active" title="Directory view. Click to show flat list" aria-label="Toggle changes view" aria-pressed="true">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M1.8 8s2.2-4 6.2-4 6.2 4 6.2 4-2.2 4-6.2 4-6.2-4-6.2-4z"></path>
+              <circle cx="8" cy="8" r="1.8"></circle>
+            </svg>
+          </button>
           <button id="group-menu" class="tool-button" title="Group and show options" aria-haspopup="menu" aria-expanded="false">&#x25A4;</button>
         </div>
         <span class="tool-separator" aria-hidden="true"></span>
@@ -801,6 +875,11 @@ function renderWebview(webview) {
             <span class="menu-check">&#x2713;</span>
             <span>Directory</span>
             <span class="menu-shortcut">Ctrl+Alt+P</span>
+          </button>
+          <button id="group-flat" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false">
+            <span class="menu-check"></span>
+            <span>Flat List</span>
+            <span class="menu-shortcut"></span>
           </button>
           <div class="menu-section-title">Show</div>
           <button id="show-ignored" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false" disabled>
@@ -872,6 +951,7 @@ function renderWebview(webview) {
       const minRightPaneWidth = 320;
       const splitterWidth = 12;
       let selectedPath = '';
+      let viewMode = persisted.viewMode === 'flat' ? 'flat' : 'directory';
       let leftPaneWidth = hasPersistedPaneWidth
         ? Number(persisted.leftPaneWidth)
         : 0;
@@ -902,12 +982,13 @@ function renderWebview(webview) {
           'refresh',
           'unstage-all',
           'stage-all',
-          'open-selected',
+          'view-mode-toggle',
           'group-menu',
           'expand-all',
           'collapse-all',
           'view-menu',
           'group-directory',
+          'group-flat',
           'show-ignored',
           'repo-select',
           'changes-count',
@@ -939,11 +1020,7 @@ function renderWebview(webview) {
         elements['unstage-all'].addEventListener('click', function () {
           vscode.postMessage({ type: 'unstageAll' });
         });
-        elements['open-selected'].addEventListener('click', function () {
-          if (selectedPath) {
-            vscode.postMessage({ type: 'openDiff', path: selectedPath });
-          }
-        });
+        elements['view-mode-toggle'].addEventListener('click', toggleViewMode);
         elements['group-menu'].addEventListener('click', function (event) {
           event.stopPropagation();
           toggleViewMenu();
@@ -952,6 +1029,11 @@ function renderWebview(webview) {
           event.stopPropagation();
         });
         elements['group-directory'].addEventListener('click', function () {
+          setViewMode('directory');
+          closeViewMenu();
+        });
+        elements['group-flat'].addEventListener('click', function () {
+          setViewMode('flat');
           closeViewMenu();
         });
         elements['expand-all'].addEventListener('click', expandAllFolders);
@@ -1096,7 +1178,8 @@ function renderWebview(webview) {
         const nextState = Object.assign({}, vscode.getState() || {}, {
           layoutVersion: layoutVersion,
           leftPaneWidth: leftPaneWidth,
-          collapsedFolders: Array.from(collapsedFolders)
+          collapsedFolders: Array.from(collapsedFolders),
+          viewMode: viewMode
         });
         vscode.setState(nextState);
       }
@@ -1146,6 +1229,26 @@ function renderWebview(webview) {
         elements['view-menu'].hidden = true;
         elements['group-menu'].setAttribute('aria-expanded', 'false');
         elements['group-menu'].classList.remove('active');
+      }
+
+      function toggleViewMode() {
+        setViewMode(viewMode === 'directory' ? 'flat' : 'directory');
+      }
+
+      function setViewMode(mode) {
+        if (mode !== 'directory' && mode !== 'flat') {
+          return;
+        }
+
+        if (viewMode === mode) {
+          renderViewModeControls();
+          return;
+        }
+
+        viewMode = mode;
+        persistUiState();
+        renderChanges();
+        renderCommitPanel();
       }
 
       function positionViewMenu() {
@@ -1200,12 +1303,22 @@ function renderWebview(webview) {
           selectedPath = changes[0].path;
         }
 
-        const tree = buildChangeTree(changes);
         const fragment = document.createDocumentFragment();
 
-        tree.children.forEach(function (node) {
-          appendTreeNode(fragment, node, 0);
-        });
+        if (viewMode === 'flat') {
+          changes
+            .slice()
+            .sort(compareChangesByPath)
+            .forEach(function (change) {
+              fragment.appendChild(fileRow(change, 0, { showDirectory: true }));
+            });
+        } else {
+          const tree = buildChangeTree(changes);
+
+          tree.children.forEach(function (node) {
+            appendTreeNode(fragment, node, 0);
+          });
+        }
 
         elements['changes-list'].appendChild(fragment);
       }
@@ -1386,8 +1499,11 @@ function renderWebview(webview) {
         count.className = 'folder-count';
         count.textContent = node.stagedCount + '/' + node.fileCount;
 
+        const icon = createFolderIcon();
+
         row.appendChild(disclosure);
         row.appendChild(checkbox);
+        row.appendChild(icon);
         row.appendChild(name);
         row.appendChild(count);
         row.addEventListener('click', function () {
@@ -1397,9 +1513,10 @@ function renderWebview(webview) {
         return row;
       }
 
-      function fileRow(change, depth) {
+      function fileRow(change, depth, options) {
         const row = document.createElement('div');
         const description = statusDescription(change);
+        const showDirectory = Boolean(options && options.showDirectory);
         row.className = 'tree-row file-row' + (change.path === selectedPath ? ' selected' : '');
         row.style.paddingLeft = treePadding(depth);
         row.title = change.path + '\\n' + description + ' / ' + (change.staged ? 'checked' : 'unchecked');
@@ -1439,9 +1556,23 @@ function renderWebview(webview) {
         name.className = 'file-name';
         name.textContent = baseName(change.path);
 
+        const icon = createFileIcon(change.path);
+
         main.appendChild(name);
+        if (showDirectory) {
+          const directory = directoryName(change.path);
+
+          if (directory) {
+            const directoryNode = document.createElement('span');
+            directoryNode.className = 'file-directory';
+            directoryNode.textContent = directory;
+            main.appendChild(directoryNode);
+          }
+        }
+
         row.appendChild(spacer);
         row.appendChild(checkbox);
+        row.appendChild(icon);
         row.appendChild(main);
         row.appendChild(status);
         row.addEventListener('click', function () {
@@ -1524,19 +1655,38 @@ function renderWebview(webview) {
         const hasMessage = textarea.value.trim().length > 0;
         const hasRepo = Boolean(state.selectedRoot);
         const hasChanges = (state.totalCount || 0) > 0;
-        const hasFolders = hasChanges && collectFolderPaths().length > 0;
+        const hasFolders = viewMode === 'directory' && hasChanges && collectFolderPaths().length > 0;
         elements.commit.disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements['commit-push'].disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements.generate.disabled = Boolean(state.busy) || !hasRepo || !state.canGenerate;
         elements['stage-all'].disabled = Boolean(state.busy) || !hasRepo || !hasChanges;
         elements['unstage-all'].disabled = Boolean(state.busy) || !hasRepo || state.stagedCount === 0;
-        elements['open-selected'].disabled = Boolean(state.busy) || !selectedPath;
+        elements['view-mode-toggle'].disabled = !hasRepo || !hasChanges;
         elements['group-menu'].disabled = !hasRepo;
         elements['expand-all'].disabled = !hasFolders;
         elements['collapse-all'].disabled = !hasFolders;
+        renderViewModeControls();
 
         elements['footer-status'].textContent = state.errorText || state.statusText || '';
         elements['footer-status'].classList.toggle('error', Boolean(state.errorText));
+      }
+
+      function renderViewModeControls() {
+        const isDirectory = viewMode === 'directory';
+        const toggle = elements['view-mode-toggle'];
+        toggle.classList.toggle('active', isDirectory);
+        toggle.setAttribute('aria-pressed', isDirectory ? 'true' : 'false');
+        toggle.title = isDirectory
+          ? 'Directory view. Click to show flat list'
+          : 'Flat list. Click to group by directory';
+
+        elements['group-directory'].classList.toggle('selected', isDirectory);
+        elements['group-directory'].setAttribute('aria-checked', isDirectory ? 'true' : 'false');
+        elements['group-directory'].querySelector('.menu-check').textContent = isDirectory ? '\\u2713' : '';
+
+        elements['group-flat'].classList.toggle('selected', !isDirectory);
+        elements['group-flat'].setAttribute('aria-checked', isDirectory ? 'false' : 'true');
+        elements['group-flat'].querySelector('.menu-check').textContent = isDirectory ? '' : '\\u2713';
       }
 
       function changeSummary() {
@@ -1556,6 +1706,93 @@ function renderWebview(webview) {
         }
 
         return staged + '/' + total + ' checked';
+      }
+
+      function createFolderIcon() {
+        const icon = document.createElement('span');
+        icon.className = 'entry-icon folder-icon';
+        icon.setAttribute('aria-hidden', 'true');
+
+        const svg = createSvg();
+        const back = createSvgPath('M1.7 5.1h4l1.1 1.3h7.5v1.2H1.7z');
+        const front = createSvgPath('M1.7 6.4h12.6l-.8 6.1H2.5z');
+        back.setAttribute('opacity', '0.45');
+        front.setAttribute('opacity', '0.92');
+        svg.appendChild(back);
+        svg.appendChild(front);
+        icon.appendChild(svg);
+
+        return icon;
+      }
+
+      function createFileIcon(filePath) {
+        const kind = fileIconKind(filePath);
+        const icon = document.createElement('span');
+        icon.className = 'entry-icon file-icon file-icon-' + kind;
+        icon.setAttribute('aria-hidden', 'true');
+
+        const svg = createSvg();
+        svg.appendChild(createSvgPath('M4 2.5h5.2L12 5.3v8.2H4z'));
+        svg.appendChild(createSvgPath('M9 2.5v3h3'));
+        icon.appendChild(svg);
+
+        return icon;
+      }
+
+      function createSvg() {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('focusable', 'false');
+
+        return svg;
+      }
+
+      function createSvgPath(d) {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+
+        return path;
+      }
+
+      function fileIconKind(filePath) {
+        const name = baseName(filePath).toLowerCase();
+
+        if (name === 'dockerfile' || name.startsWith('docker-compose')) {
+          return 'docker';
+        }
+
+        if (name === '.env' || name.endsWith('.env') || name.includes('.env.')) {
+          return 'env';
+        }
+
+        const extension = name.includes('.')
+          ? name.slice(name.lastIndexOf('.') + 1)
+          : '';
+
+        if (extension === 'php') {
+          return 'php';
+        }
+        if (extension === 'yml' || extension === 'yaml') {
+          return 'yaml';
+        }
+        if (extension === 'json') {
+          return 'json';
+        }
+        if (extension === 'cs' || extension === 'csproj') {
+          return 'csharp';
+        }
+        if (extension === 'js' || extension === 'mjs' || extension === 'cjs') {
+          return 'js';
+        }
+        if (extension === 'ts' || extension === 'tsx') {
+          return 'ts';
+        }
+        if (extension === 'md' || extension === 'markdown') {
+          return 'md';
+        }
+
+        return 'default';
       }
 
       function empty(title, text) {
@@ -1620,9 +1857,20 @@ function renderWebview(webview) {
         return 'Modified file';
       }
 
+      function compareChangesByPath(left, right) {
+        return String(left.path || '').localeCompare(String(right.path || ''));
+      }
+
       function baseName(filePath) {
         const parts = String(filePath || '').split('/');
         return parts[parts.length - 1] || filePath;
+      }
+
+      function directoryName(filePath) {
+        const parts = String(filePath || '').split('/');
+        parts.pop();
+
+        return parts.join('\\\\');
       }
 
     }());
