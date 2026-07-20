@@ -367,7 +367,7 @@ function renderWebview(webview) {
 
     .tree-row {
       display: grid;
-      grid-template-columns: 14px 16px minmax(0, 1fr) 24px;
+      grid-template-columns: 14px 16px minmax(0, 1fr) 30px;
       align-items: center;
       gap: 4px;
       min-height: 22px;
@@ -460,16 +460,17 @@ function renderWebview(webview) {
     }
 
     .status {
-      width: 24px;
+      width: 30px;
       height: 18px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       background: transparent;
       font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
       justify-self: end;
+      text-transform: uppercase;
     }
 
     .folder-main {
@@ -1334,9 +1335,10 @@ function renderWebview(webview) {
 
       function fileRow(change, depth) {
         const row = document.createElement('div');
+        const description = statusDescription(change);
         row.className = 'tree-row file-row' + (change.path === selectedPath ? ' selected' : '');
         row.style.paddingLeft = treePadding(depth);
-        row.title = change.path + '\\n' + (change.staged ? 'Checked / staged' : 'Unchecked / unstaged');
+        row.title = change.path + '\\n' + description + ' / ' + (change.staged ? 'checked' : 'unchecked');
         row.dataset.path = change.path;
 
         const spacer = document.createElement('span');
@@ -1363,6 +1365,8 @@ function renderWebview(webview) {
         const status = document.createElement('span');
         status.className = 'status ' + (change.kind || 'changed');
         status.textContent = statusLabel(change);
+        status.title = description;
+        status.setAttribute('aria-label', description);
 
         const main = document.createElement('span');
         main.className = 'file-main';
@@ -1510,7 +1514,7 @@ function renderWebview(webview) {
 
       function statusLabel(change) {
         if (change.kind === 'untracked') {
-          return '?';
+          return 'new';
         }
         if (change.kind === 'added') {
           return 'A';
@@ -1528,6 +1532,28 @@ function renderWebview(webview) {
           return '!';
         }
         return 'M';
+      }
+
+      function statusDescription(change) {
+        if (change.kind === 'untracked') {
+          return 'Untracked file';
+        }
+        if (change.kind === 'added') {
+          return 'Added file';
+        }
+        if (change.kind === 'deleted') {
+          return 'Deleted file';
+        }
+        if (change.kind === 'renamed') {
+          return 'Renamed file';
+        }
+        if (change.kind === 'copied') {
+          return 'Copied file';
+        }
+        if (change.kind === 'conflict') {
+          return 'Merge conflict';
+        }
+        return 'Modified file';
       }
 
       function baseName(filePath) {

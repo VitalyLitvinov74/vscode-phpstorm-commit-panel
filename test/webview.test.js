@@ -12,7 +12,7 @@ function run() {
 
   assert.match(
     html,
-    /grid-template-columns:\s*14px 16px minmax\(0, 1fr\) 24px/,
+    /grid-template-columns:\s*14px 16px minmax\(0, 1fr\) 30px/,
     'changes tree rows must stay compact and single-line'
   );
   assert.match(
@@ -66,6 +66,17 @@ function run() {
     'changes toolbar must include a real collapse all tree action'
   );
   assert.ok(!html.includes('accent-color: var(--blue);'), 'checkboxes must not use bright button blue');
+  assert.ok(!html.includes("return '?';"), 'untracked files must not be shown as unclear question marks');
+  assert.match(
+    html,
+    /return 'new';/,
+    'untracked files must use an explicit short status label'
+  );
+  assert.match(
+    html,
+    /return 'Untracked file';/,
+    'untracked files must have an explicit tooltip description'
+  );
   assert.ok(!html.includes('file-meta'), 'old wide file metadata column must not return');
   assert.ok(!html.includes('folder-icon'), 'old extra folder icon column must not return');
 
