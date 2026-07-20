@@ -1,0 +1,34 @@
+{
+  "file": "file_text",
+  "folder": "folder",
+  "folderExpanded": "folder_open",
+  "fileExtensions": {
+    "cs": "file_cs"
+  },
+  "fileNames": {
+    "Dockerfile": "file_docker"
+  },
+  "folderNames": {
+    ".vscode": "folder_vscode"
+  },
+  "iconDefinitions": {
+    "file_text": {
+      "iconPath": "./icons/file/text.svg"
+    },
+    "file_cs": {
+      "iconPath": "./icons/file/cs.svg"
+    },
+    "file_docker": {
+      "iconPath": "./icons/file/docker.svg"
+    },
+    "folder": {
+      "iconPath": "./icons/folder/folder.svg"
+    },
+    "folder_open": {
+      "iconPath": "./icons/folder/folder-open.svg"
+    },
+    "folder_vscode": {
+      "iconPath": "./icons/folder/vscode.svg"
+    }
+  }
+}

@@ -3,7 +3,7 @@
 const path = require('path');
 const vscode = require('vscode');
 const git = require('./src/git');
-const { renderWebview } = require('./src/webview');
+const { renderWebview, resolveActiveFileIconTheme } = require('./src/webview');
 
 const VIEW_ID = 'phpstormGitPanel.changes';
 const VIRTUAL_SCHEME = 'phpstorm-git-panel';
@@ -33,18 +33,24 @@ class PhpStormCommitPanelProvider {
       canGenerate: false
     };
 
-    this.context.subscriptions.push({
-      dispose: () => this.clearScheduledRefresh()
-    });
+    this.context.subscriptions.push(
+      {
+        dispose: () => this.clearScheduledRefresh()
+      },
+      vscode.workspace.onDidChangeConfiguration(
+        (event) => {
+          if (event.affectsConfiguration('workbench.iconTheme')) {
+            this.renderPanelWebview();
+            this.refresh();
+          }
+        }
+      )
+    );
   }
 
   resolveWebviewView(webviewView) {
     this.view = webviewView;
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.context.extensionUri]
-    };
-    webviewView.webview.html = renderWebview(webviewView.webview);
+    this.renderPanelWebview();
 
     this.context.subscriptions.push(
       webviewView.webview.onDidReceiveMessage((message) => this.handleMessage(message)),
@@ -56,6 +62,25 @@ class PhpStormCommitPanelProvider {
     );
 
     this.refresh();
+  }
+
+  renderPanelWebview() {
+    if (!this.view) {
+      return;
+    }
+
+    const fileIconTheme = resolveActiveFileIconTheme();
+    const localResourceRoots = [this.context.extensionUri];
+
+    if (fileIconTheme?.extensionUri) {
+      localResourceRoots.push(fileIconTheme.extensionUri);
+    }
+
+    this.view.webview.options = {
+      enableScripts: true,
+      localResourceRoots
+    };
+    this.view.webview.html = renderWebview(this.view.webview, fileIconTheme);
   }
 
   async handleMessage(message) {

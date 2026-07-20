@@ -3,12 +3,30 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { renderWebview } = require('../src/webview');
+const { buildFileIconTheme, renderWebview } = require('../src/webview');
 
 function run() {
   const html = renderWebview({ cspSource: 'vscode-resource:' });
   const extensionSource = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+  const webviewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'webview.js'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const fixtureIconTheme = buildFileIconTheme(
+    {
+      asWebviewUri(uri) {
+        return {
+          toString() {
+            return 'webview-resource://' + uri.fsPath.replace(/\\/g, '/');
+          }
+        };
+      }
+    },
+    {
+      extensionUri: {
+        fsPath: path.join(__dirname, 'fixtures', 'icon-theme')
+      },
+      themePath: './themes/test-icon-theme.json'
+    }
+  );
 
   assert.match(
     html,
@@ -18,37 +36,51 @@ function run() {
   assert.match(
     html,
     /className = 'entry-icon folder-icon'/,
-    'folder rows must render Explorer-style folder icons'
+    'folder rows must reserve an Explorer icon slot'
   );
   assert.match(
     html,
-    /className = 'entry-icon file-icon file-icon-' \+ kind/,
-    'file rows must render Explorer-style file icons'
+    /className = 'entry-icon file-icon'/,
+    'file rows must reserve an Explorer icon slot'
   );
   assert.match(
     html,
-    /function fileIconKind\(filePath\)/,
-    'file icons must be selected from the file path extension'
+    /function appendThemeIcon\(container, iconUri, fallbackType\)/,
+    'file and folder icons must render from the active VS Code icon theme'
   );
   assert.match(
     html,
-    /function appendDockerIcon\(icon\)/,
-    'Dockerfile rows must render a Docker-specific icon instead of a generic document'
+    /function resolveFileIcon\(filePath\)/,
+    'file icons must be selected through the active icon theme mappings'
   );
   assert.match(
     html,
-    /createFileBadge\('C#'\)/,
-    'C# rows must render the Explorer-like C# badge icon'
+    /function resolveFolderIcon\(folderName, expanded\)/,
+    'folder icons must be selected through the active icon theme mappings'
   );
   assert.match(
     html,
-    /function appendEnvIcon\(icon\)/,
-    'env files must render a settings-style icon instead of a generic document'
+    /className = 'theme-icon-img'/,
+    'icons must render as image resources from the current VS Code file icon theme'
+  );
+  assert.equal(
+    fixtureIconTheme.fileExtensions.cs,
+    'file_cs',
+    'icon theme file extension mappings must be loaded'
+  );
+  assert.equal(
+    fixtureIconTheme.fileNames.dockerfile,
+    'file_docker',
+    'icon theme file name mappings must be normalized case-insensitively'
   );
   assert.match(
-    html,
-    /\.folder-icon\s*\{[\s\S]*?color:\s*color-mix\(in srgb, var\(--muted\) 86%, var\(--text\) 14%\);/,
-    'folder icons must use the muted Explorer-like outline color'
+    fixtureIconTheme.definitions.folder,
+    /webview-resource:\/\/.*themes\/icons\/folder\/folder\.svg/,
+    'folder icon definitions must resolve to webview-safe theme image URIs'
+  );
+  assert.ok(
+    !html.includes('appendDockerIcon') && !html.includes('createFileBadge') && !html.includes('fileIconKind'),
+    'custom hand-drawn icon renderers must not return'
   );
   assert.match(
     html,
@@ -98,6 +130,11 @@ function run() {
   assert.ok(
     !html.includes('\\\\u25BE') && !html.includes('\\\\u25B8') && !html.includes('&#x25BE;'),
     'changes tree must not render disclosure arrows as font-dependent unicode glyphs'
+  );
+  assert.doesNotMatch(
+    html,
+    /font-weight:\s*(?:[5-9]00|bold|bolder)/,
+    'panel text must not use bold font weights'
   );
   assert.match(
     html,
@@ -170,6 +207,22 @@ function run() {
   assert.ok(
     extensionSource.includes('enqueueStagingOperation(this.state.selectedRoot, paths, checked);'),
     'checkbox staging must run through the non-blocking staging queue'
+  );
+  assert.ok(
+    extensionSource.includes('resolveActiveFileIconTheme();'),
+    'extension host must use the active VS Code file icon theme'
+  );
+  assert.ok(
+    extensionSource.includes('localResourceRoots.push(fileIconTheme.extensionUri);'),
+    'webview must allow image resources from the active icon theme extension'
+  );
+  assert.ok(
+    webviewSource.includes('findIconThemeInExtensionRoots(activeThemeId)'),
+    'icon theme resolver must fall back to installed VS Code extension roots instead of bundling copied icons'
+  );
+  assert.ok(
+    !fs.existsSync(path.join(__dirname, '..', 'resources', 'file-icons')),
+    'VSIX must not bundle a copied file icon theme'
   );
   assert.ok(
     !extensionSource.includes("enqueueOperation('Updating Git index...'"),

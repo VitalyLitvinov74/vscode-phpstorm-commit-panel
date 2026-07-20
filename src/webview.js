@@ -1,7 +1,13 @@
 'use strict';
 
-function renderWebview(webview) {
+const fs = require('fs');
+const path = require('path');
+
+let vscodeModule;
+
+function renderWebview(webview, fileIconThemeSource) {
   const nonce = getNonce();
+  const activeFileIcons = buildFileIconTheme(webview, fileIconThemeSource);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -54,6 +60,7 @@ function renderWebview(webview) {
       background: var(--panel-bg);
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
+      font-weight: 400;
       overflow: hidden;
     }
 
@@ -191,7 +198,7 @@ function renderWebview(webview) {
       justify-content: center;
       color: var(--muted);
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 400;
       line-height: 1;
       border-radius: 3px;
     }
@@ -257,7 +264,7 @@ function renderWebview(webview) {
       padding: 4px 8px 5px;
       color: color-mix(in srgb, var(--muted) 84%, transparent);
       font-size: 11px;
-      font-weight: 600;
+      font-weight: 400;
       text-transform: none;
     }
 
@@ -338,7 +345,7 @@ function renderWebview(webview) {
       min-width: 0;
       overflow: hidden;
       color: var(--text);
-      font-weight: 600;
+      font-weight: 400;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -382,7 +389,7 @@ function renderWebview(webview) {
 
     .empty-title {
       color: var(--text);
-      font-weight: 600;
+      font-weight: 400;
       margin-bottom: 5px;
     }
 
@@ -457,98 +464,19 @@ function renderWebview(webview) {
 
     .entry-icon {
       width: 16px;
-      height: 20px;
+      height: 16px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+      flex: 0 0 16px;
       pointer-events: none;
     }
 
-    .entry-icon svg {
-      width: 15px;
-      height: 15px;
+    .theme-icon-img {
+      width: 16px;
+      height: 16px;
       display: block;
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 1.45;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    .entry-icon svg.filled-icon {
-      fill: currentColor;
-      stroke: none;
-    }
-
-    .folder-icon {
-      color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
-    }
-
-    .file-icon {
-      color: var(--vscode-symbolIcon-fileForeground, color-mix(in srgb, var(--muted) 90%, var(--text) 10%));
-    }
-
-    .file-icon-php {
-      color: #8b9ad9;
-    }
-
-    .file-icon-yaml,
-    .file-icon-json,
-    .file-icon-env {
-      color: #d7ba7d;
-    }
-
-    .file-icon-docker {
-      color: #2496ed;
-    }
-
-    .file-icon-csharp {
-      color: #b180d7;
-    }
-
-    .file-icon-js,
-    .file-icon-ts {
-      color: #dcdc6b;
-    }
-
-    .file-icon-md {
-      color: #6caee8;
-    }
-
-    .file-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 15px;
-      height: 14px;
-      font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 9px;
-      font-weight: 700;
-      line-height: 1;
-      letter-spacing: -0.7px;
-    }
-
-    .file-icon-csharp .file-badge {
-      color: #89d185;
-    }
-
-    .file-icon-md .file-badge {
-      color: #6caee8;
-      font-size: 10px;
-      letter-spacing: -0.9px;
-    }
-
-    .file-icon-env svg {
-      color: #75beff;
-      stroke-width: 1.35;
-    }
-
-    .file-icon-yaml .file-badge,
-    .file-icon-json .file-badge {
-      color: #d7ba7d;
-      font-size: 8px;
-      letter-spacing: -0.8px;
+      object-fit: contain;
     }
 
     .file-checkbox,
@@ -618,7 +546,7 @@ function renderWebview(webview) {
       background: transparent;
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 400;
       justify-self: end;
       text-transform: uppercase;
     }
@@ -627,7 +555,7 @@ function renderWebview(webview) {
       min-width: 0;
       overflow: hidden;
       color: inherit;
-      font-weight: 500;
+      font-weight: 400;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -677,7 +605,7 @@ function renderWebview(webview) {
       flex: 0 1 auto;
       overflow: hidden;
       color: inherit;
-      font-weight: 500;
+      font-weight: 400;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -814,7 +742,7 @@ function renderWebview(webview) {
       color: var(--blue-fg);
       background: var(--blue);
       border-radius: 4px;
-      font-weight: 600;
+      font-weight: 400;
     }
 
     .primary:hover:not(:disabled) {
@@ -972,6 +900,7 @@ function renderWebview(webview) {
   <script nonce="${nonce}">
     (function () {
       const vscode = acquireVsCodeApi();
+      const activeFileIcons = ${serializeForScript(activeFileIcons)};
       const elements = {};
       const persisted = vscode.getState() || {};
       const layoutVersion = 3;
@@ -1539,7 +1468,7 @@ function renderWebview(webview) {
         count.className = 'folder-count';
         count.textContent = node.stagedCount + '/' + node.fileCount;
 
-        const icon = createFolderIcon();
+        const icon = createFolderIcon(node, expanded);
 
         row.appendChild(disclosure);
         row.appendChild(checkbox);
@@ -1748,149 +1677,84 @@ function renderWebview(webview) {
         return staged + '/' + total + ' checked';
       }
 
-      function createFolderIcon() {
+      function createFolderIcon(node, expanded) {
         const icon = document.createElement('span');
         icon.className = 'entry-icon folder-icon';
         icon.setAttribute('aria-hidden', 'true');
-
-        const svg = createSvg();
-        const back = createSvgPath('M1.9 5.3h4.4l1.2 1.4h6.6');
-        const front = createSvgPath('M2 6.8h12v6H2z');
-        svg.appendChild(back);
-        svg.appendChild(front);
-        icon.appendChild(svg);
+        appendThemeIcon(icon, resolveFolderIcon(node.name, expanded), 'folder');
 
         return icon;
       }
 
       function createFileIcon(filePath) {
-        const kind = fileIconKind(filePath);
         const icon = document.createElement('span');
-        icon.className = 'entry-icon file-icon file-icon-' + kind;
+        icon.className = 'entry-icon file-icon';
         icon.setAttribute('aria-hidden', 'true');
-
-        if (kind === 'docker') {
-          appendDockerIcon(icon);
-          return icon;
-        }
-
-        if (kind === 'csharp') {
-          icon.appendChild(createFileBadge('C#'));
-          return icon;
-        }
-
-        if (kind === 'md') {
-          icon.appendChild(createFileBadge('M↓'));
-          return icon;
-        }
-
-        if (kind === 'env') {
-          appendEnvIcon(icon);
-          return icon;
-        }
-
-        if (kind === 'yaml') {
-          icon.appendChild(createFileBadge('Y'));
-          return icon;
-        }
-
-        if (kind === 'json') {
-          icon.appendChild(createFileBadge('{}'));
-          return icon;
-        }
-
-        appendDocumentIcon(icon);
+        appendThemeIcon(icon, resolveFileIcon(filePath), 'file');
 
         return icon;
       }
 
-      function appendDocumentIcon(icon) {
-        const svg = createSvg();
-        svg.appendChild(createSvgPath('M4 2.5h5.2L12 5.3v8.2H4z'));
-        svg.appendChild(createSvgPath('M9 2.5v3h3'));
-        icon.appendChild(svg);
+      function appendThemeIcon(container, iconUri, fallbackType) {
+        if (!iconUri) {
+          container.classList.add('missing-theme-icon', 'missing-theme-icon-' + fallbackType);
+          return;
+        }
+
+        const image = document.createElement('img');
+        image.className = 'theme-icon-img';
+        image.src = iconUri;
+        image.alt = '';
+        image.decoding = 'async';
+        image.draggable = false;
+        container.appendChild(image);
       }
 
-      function appendDockerIcon(icon) {
-        const svg = createSvg();
-        svg.classList.add('filled-icon');
-        svg.appendChild(createSvgPath('M2.1 9.6h8.7c-.2 1.7-1.7 3.1-4.1 3.1H4.9c-1.7 0-2.8-.9-2.8-2.4v-.7z'));
-        svg.appendChild(createSvgPath('M11.1 9.5c.8-.1 1.5-.6 1.9-1.3.4.6 1 1 1.8 1.1-.7.4-1.4.5-2.1.4-.5.4-1 .7-1.7.8l.1-1z'));
-        svg.appendChild(createSvgPath('M3.2 6.6h1.7v1.5H3.2zM5.2 6.6h1.7v1.5H5.2zM7.2 6.6h1.7v1.5H7.2zM5.2 4.8h1.7v1.5H5.2zM7.2 4.8h1.7v1.5H7.2zM9.2 6.6h1.7v1.5H9.2z'));
-        icon.appendChild(svg);
+      function resolveFolderIcon(folderName, expanded) {
+        const names = expanded
+          ? activeFileIcons.folderNamesExpanded || {}
+          : activeFileIcons.folderNames || {};
+        const fallbackNames = activeFileIcons.folderNames || {};
+        const specific = iconDefinitionId(names, folderName)
+          || iconDefinitionId(fallbackNames, folderName);
+
+        return iconUri(specific || (expanded ? activeFileIcons.folderExpanded : activeFileIcons.folder));
       }
 
-      function appendEnvIcon(icon) {
-        const svg = createSvg();
-        svg.appendChild(createSvgPath('M3.8 2.5h5.4L12 5.3v8.2H3.8z'));
-        svg.appendChild(createSvgPath('M9 2.6v3h3'));
-        svg.appendChild(createSvgPath('M7.7 8.1a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z'));
-        svg.appendChild(createSvgPath('M7.7 6.9v.7M7.7 11.8v.7M5.7 7.7l.5.5M9.2 11.2l.5.5M4.9 9.7h.7M9.8 9.7h.7M5.7 11.7l.5-.5M9.2 8.2l.5-.5'));
-        icon.appendChild(svg);
+      function resolveFileIcon(filePath) {
+        const normalizedPath = String(filePath || '').replace(/\\\\/g, '/');
+        const name = baseName(normalizedPath);
+        const byName = iconDefinitionId(activeFileIcons.fileNames || {}, name);
+
+        if (byName) {
+          return iconUri(byName);
+        }
+
+        const lowerName = name.toLowerCase();
+        const parts = lowerName.split('.');
+
+        for (let index = 1; index < parts.length; index += 1) {
+          const extension = parts.slice(index).join('.');
+          const byExtension = activeFileIcons.fileExtensions?.[extension];
+
+          if (byExtension) {
+            return iconUri(byExtension);
+          }
+        }
+
+        return iconUri(activeFileIcons.file);
       }
 
-      function createFileBadge(text) {
-        const badge = document.createElement('span');
-        badge.className = 'file-badge';
-        badge.textContent = text;
+      function iconDefinitionId(iconMap, key) {
+        if (!key) {
+          return '';
+        }
 
-        return badge;
+        return iconMap[key] || iconMap[String(key).toLowerCase()] || '';
       }
 
-      function createSvg() {
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('viewBox', '0 0 16 16');
-        svg.setAttribute('aria-hidden', 'true');
-        svg.setAttribute('focusable', 'false');
-
-        return svg;
-      }
-
-      function createSvgPath(d) {
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', d);
-
-        return path;
-      }
-
-      function fileIconKind(filePath) {
-        const name = baseName(filePath).toLowerCase();
-
-        if (name === 'dockerfile' || name.startsWith('docker-compose')) {
-          return 'docker';
-        }
-
-        if (name === '.env' || name.endsWith('.env') || name.includes('.env.')) {
-          return 'env';
-        }
-
-        const extension = name.includes('.')
-          ? name.slice(name.lastIndexOf('.') + 1)
-          : '';
-
-        if (extension === 'php') {
-          return 'php';
-        }
-        if (extension === 'yml' || extension === 'yaml') {
-          return 'yaml';
-        }
-        if (extension === 'json') {
-          return 'json';
-        }
-        if (extension === 'cs' || extension === 'csproj') {
-          return 'csharp';
-        }
-        if (extension === 'js' || extension === 'mjs' || extension === 'cjs') {
-          return 'js';
-        }
-        if (extension === 'ts' || extension === 'tsx') {
-          return 'ts';
-        }
-        if (extension === 'md' || extension === 'markdown') {
-          return 'md';
-        }
-
-        return 'default';
+      function iconUri(definitionId) {
+        return activeFileIcons.definitions?.[definitionId] || '';
       }
 
       function empty(title, text) {
@@ -1988,6 +1852,288 @@ function getNonce() {
   return nonce;
 }
 
+function resolveActiveFileIconTheme() {
+  const vscode = getVscodeModule();
+
+  if (!vscode) {
+    return undefined;
+  }
+
+  const activeThemeId = vscode.workspace
+    .getConfiguration('workbench')
+    .get('iconTheme');
+
+  if (!activeThemeId) {
+    return undefined;
+  }
+
+  return findIconThemeInVscodeExtensions(activeThemeId)
+    || findIconThemeInExtensionRoots(activeThemeId);
+}
+
+function findIconThemeInVscodeExtensions(activeThemeId) {
+  const vscode = getVscodeModule();
+
+  for (const extension of vscode.extensions.all) {
+    const iconThemes = extension.packageJSON?.contributes?.iconThemes || [];
+    const theme = iconThemes.find(
+      function (candidate) {
+        return candidate.id === activeThemeId;
+      }
+    );
+
+    if (!theme?.path) {
+      continue;
+    }
+
+    return {
+      id: activeThemeId,
+      extensionId: extension.id,
+      extensionUri: extension.extensionUri,
+      themePath: theme.path
+    };
+  }
+
+  return undefined;
+}
+
+function findIconThemeInExtensionRoots(activeThemeId) {
+  const vscode = getVscodeModule();
+
+  if (!vscode) {
+    return undefined;
+  }
+
+  for (const root of extensionSearchRoots()) {
+    if (!fs.existsSync(root)) {
+      continue;
+    }
+
+    let extensionDirs;
+
+    try {
+      extensionDirs = fs.readdirSync(root, { withFileTypes: true })
+        .filter(
+          function (entry) {
+            return entry.isDirectory();
+          }
+        )
+        .map(
+          function (entry) {
+            return path.join(root, entry.name);
+          }
+        );
+    } catch (_) {
+      continue;
+    }
+
+    for (const extensionDir of extensionDirs) {
+      const packageJsonPath = path.join(extensionDir, 'package.json');
+
+      if (!fs.existsSync(packageJsonPath)) {
+        continue;
+      }
+
+      let packageJson;
+
+      try {
+        packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      } catch (_) {
+        continue;
+      }
+      const iconThemes = packageJson.contributes?.iconThemes || [];
+      const theme = iconThemes.find(
+        function (candidate) {
+          return candidate.id === activeThemeId;
+        }
+      );
+
+      if (!theme?.path) {
+        continue;
+      }
+
+      return {
+        id: activeThemeId,
+        extensionId: packageJson.publisher + '.' + packageJson.name,
+        extensionUri: vscode.Uri.file(extensionDir),
+        themePath: theme.path
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function extensionSearchRoots() {
+  const roots = new Set();
+
+  addExtensionRoot(roots, process.env.USERPROFILE && path.join(process.env.USERPROFILE, '.vscode', 'extensions'));
+  addExtensionRoot(roots, process.env.HOME && path.join(process.env.HOME, '.vscode', 'extensions'));
+  addExtensionRoot(roots, process.env.HOME && path.join(process.env.HOME, '.vscode-server', 'extensions'));
+
+  if (process.platform === 'linux' && fs.existsSync('/mnt/c/Users')) {
+    try {
+      fs.readdirSync('/mnt/c/Users', { withFileTypes: true })
+        .filter(
+          function (entry) {
+            return entry.isDirectory();
+          }
+        )
+        .forEach(
+          function (entry) {
+            addExtensionRoot(
+              roots,
+              path.join('/mnt/c/Users', entry.name, '.vscode', 'extensions')
+            );
+          }
+        );
+    } catch (_) {
+      // Ignore inaccessible Windows profiles.
+    }
+  }
+
+  return Array.from(roots);
+}
+
+function addExtensionRoot(roots, root) {
+  if (root) {
+    roots.add(root);
+  }
+}
+
+function buildFileIconTheme(webview, themeSource) {
+  const empty = {
+    definitions: {},
+    file: '',
+    folder: '',
+    folderExpanded: '',
+    fileExtensions: {},
+    fileNames: {},
+    folderNames: {},
+    folderNamesExpanded: {}
+  };
+
+  if (!themeSource?.extensionUri || !themeSource.themePath || !webview || typeof webview.asWebviewUri !== 'function') {
+    return empty;
+  }
+
+  const themePath = normalizedThemePath(themeSource.themePath);
+  const themeJsonUri = resourceUri(themeSource.extensionUri, themePathParts(themePath));
+
+  if (!themeJsonUri.fsPath || !fs.existsSync(themeJsonUri.fsPath)) {
+    return empty;
+  }
+
+  let theme;
+
+  try {
+    theme = JSON.parse(fs.readFileSync(themeJsonUri.fsPath, 'utf8'));
+  } catch (_) {
+    return empty;
+  }
+  const themeDirectory = path.posix.dirname(themePath);
+  const definitions = {};
+
+  Object.entries(theme.iconDefinitions || {}).forEach(
+    function ([id, definition]) {
+      if (!definition || !definition.iconPath) {
+        return;
+      }
+
+      const iconRelativePath = path.posix.normalize(
+        path.posix.join(
+          themeDirectory,
+          normalizedThemePath(definition.iconPath)
+        )
+      );
+      const iconUri = resourceUri(
+        themeSource.extensionUri,
+        themePathParts(iconRelativePath)
+      );
+
+      definitions[id] = String(webview.asWebviewUri(iconUri));
+    }
+  );
+
+  return {
+    definitions: definitions,
+    file: theme.file || '',
+    folder: theme.folder || '',
+    folderExpanded: theme.folderExpanded || theme.folder || '',
+    fileExtensions: normalizedIconMap(theme.fileExtensions || {}),
+    fileNames: normalizedIconMap(theme.fileNames || {}),
+    folderNames: normalizedIconMap(theme.folderNames || {}),
+    folderNamesExpanded: normalizedIconMap(theme.folderNamesExpanded || {})
+  };
+}
+
+function resourceUri(extensionUri, relativeParts) {
+  const vscode = getVscodeModule();
+
+  if (vscode && vscode.Uri && typeof vscode.Uri.joinPath === 'function' && extensionUri.scheme) {
+    return vscode.Uri.joinPath(extensionUri, ...relativeParts);
+  }
+
+  const root = typeof extensionUri === 'string'
+    ? extensionUri
+    : extensionUri.fsPath;
+
+  return {
+    fsPath: path.join(root, ...relativeParts)
+  };
+}
+
+function normalizedThemePath(themePath) {
+  return String(themePath || '')
+    .replace(/^\.\//, '')
+    .replace(/\\/g, '/');
+}
+
+function themePathParts(themePath) {
+  return normalizedThemePath(themePath)
+    .split(/[\\/]+/)
+    .filter(
+      function (part) {
+        return part && part !== '.';
+      }
+    );
+}
+
+function normalizedIconMap(iconMap) {
+  return Object.entries(iconMap || {}).reduce(
+    function (result, [key, value]) {
+      result[key] = value;
+      result[String(key).toLowerCase()] = value;
+
+      return result;
+    },
+    {}
+  );
+}
+
+function serializeForScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function getVscodeModule() {
+  if (vscodeModule !== undefined) {
+    return vscodeModule;
+  }
+
+  try {
+    vscodeModule = require('vscode');
+  } catch (_) {
+    vscodeModule = null;
+  }
+
+  return vscodeModule;
+}
+
 module.exports = {
-  renderWebview
+  buildFileIconTheme,
+  renderWebview,
+  resolveActiveFileIconTheme
 };
