@@ -75,6 +75,9 @@ class PhpStormCommitPanelProvider {
       case 'toggleChange':
         await this.toggleChange(String(message.path ?? ''), Boolean(message.checked));
         return;
+      case 'toggleChanges':
+        await this.toggleChanges(message.paths, Boolean(message.checked));
+        return;
       case 'stageAll':
         await this.stageAll();
         return;
@@ -222,15 +225,28 @@ class PhpStormCommitPanelProvider {
   }
 
   async toggleChange(relativePath, checked) {
-    if (!relativePath || !this.state.selectedRoot) {
+    await this.toggleChanges([relativePath], checked);
+  }
+
+  async toggleChanges(relativePaths, checked) {
+    if (!Array.isArray(relativePaths) || !this.state.selectedRoot) {
+      return;
+    }
+
+    const knownPaths = new Set(this.state.changes.map((change) => change.path));
+    const paths = relativePaths
+      .map((relativePath) => String(relativePath ?? ''))
+      .filter((relativePath) => knownPaths.has(relativePath));
+
+    if (paths.length === 0) {
       return;
     }
 
     await this.enqueueOperation('Updating Git index...', async () => {
       if (checked) {
-        await git.stagePaths(this.state.selectedRoot, [relativePath]);
+        await git.stagePaths(this.state.selectedRoot, paths);
       } else {
-        await git.unstagePaths(this.state.selectedRoot, [relativePath]);
+        await git.unstagePaths(this.state.selectedRoot, paths);
       }
     });
   }

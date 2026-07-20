@@ -11,7 +11,9 @@ This VS Code extension adds a separate Activity Bar view with a split commit wor
 - Standalone Activity Bar panel, not a replacement for VS Code Source Control.
 - PhpStorm-like split layout: changes list on the left, commit message panel on the right.
 - Resizable left/right panes with a draggable splitter.
-- Cleaner JetBrains-style changes list with compact header, status badges, selection states, and empty state.
+- JetBrains-style folder tree in the changes panel with expandable folders and folder-level checkboxes.
+- Cleaner changes list with compact header, status badges, selection states, and empty state.
+- Theme-safe Activity Bar icon for dark VS Code themes.
 - Checkbox staging: checked means `git add`, unchecked means `git restore --staged`.
 - `Commit` and `Commit and Push...` buttons inside the panel.
 - `Amend` support for updating the last commit.

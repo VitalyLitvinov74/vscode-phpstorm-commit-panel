@@ -33,7 +33,7 @@ function renderWebview(webview) {
       --modified: var(--vscode-gitDecoration-modifiedResourceForeground);
       --deleted: var(--vscode-gitDecoration-deletedResourceForeground);
       --untracked: var(--vscode-gitDecoration-untrackedResourceForeground);
-      --left-pane-size: 40%;
+      --left-pane-width: 520px;
     }
 
     * {
@@ -83,7 +83,7 @@ function renderWebview(webview) {
 
     .shell {
       display: grid;
-      grid-template-columns: minmax(260px, var(--left-pane-size)) 6px minmax(360px, 1fr);
+      grid-template-columns: var(--left-pane-width) 12px minmax(320px, 1fr);
       height: 100vh;
       min-width: 680px;
       background: var(--editor-bg);
@@ -110,9 +110,20 @@ function renderWebview(webview) {
 
     .splitter {
       position: relative;
-      background: var(--border-soft);
+      background: transparent;
       cursor: col-resize;
       outline: none;
+    }
+
+    .splitter::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 1px;
+      background: var(--border-soft);
+      transform: translateX(-50%);
     }
 
     .splitter::after {
@@ -132,7 +143,7 @@ function renderWebview(webview) {
     .splitter:hover,
     .splitter.dragging,
     .splitter:focus-visible {
-      background: color-mix(in srgb, var(--accent) 36%, var(--border-soft));
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
     }
 
     .splitter:hover::after,
@@ -263,30 +274,41 @@ function renderWebview(webview) {
       max-width: 420px;
     }
 
-    .file-row {
+    .tree-row {
       display: grid;
-      grid-template-columns: 20px 22px minmax(0, 1fr) auto;
+      grid-template-columns: 16px 20px 20px minmax(0, 1fr) auto;
       align-items: center;
       gap: 7px;
-      min-height: 34px;
-      padding: 4px 7px;
+      min-height: 28px;
+      padding: 2px 7px;
       border: 1px solid transparent;
-      border-radius: 6px;
+      border-radius: 4px;
       cursor: default;
     }
 
-    .file-row + .file-row {
-      margin-top: 2px;
+    .tree-row + .tree-row {
+      margin-top: 1px;
     }
 
-    .file-row:hover {
+    .tree-row:hover {
       background: var(--surface-hover);
     }
 
-    .file-row.selected {
+    .tree-row.selected {
       color: var(--surface-active-fg);
       background: var(--surface-active);
       border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+
+    .disclosure-button {
+      width: 16px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
     }
 
     .file-checkbox {
@@ -308,6 +330,31 @@ function renderWebview(webview) {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px;
       font-weight: 700;
+    }
+
+    .folder-icon {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .folder-main {
+      min-width: 0;
+      overflow: hidden;
+      color: inherit;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .folder-count {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .tree-row.selected .folder-count {
+      color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
     }
 
     .status.added,
@@ -361,7 +408,7 @@ function renderWebview(webview) {
       white-space: nowrap;
     }
 
-    .file-row.selected .file-path {
+    .tree-row.selected .file-path {
       color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
     }
 
@@ -372,7 +419,7 @@ function renderWebview(webview) {
       white-space: nowrap;
     }
 
-    .file-row.selected .file-meta {
+    .tree-row.selected .file-meta {
       color: color-mix(in srgb, var(--surface-active-fg) 72%, transparent);
     }
 
@@ -625,8 +672,16 @@ function renderWebview(webview) {
         stagedCount: 0,
         totalCount: 0
       };
+      const minLeftPaneWidth = 260;
+      const minRightPaneWidth = 320;
+      const splitterWidth = 12;
       let selectedPath = '';
-      let leftPaneSize = persisted.leftPaneSize || '40%';
+      let leftPaneWidth = Number.isFinite(Number(persisted.leftPaneWidth))
+        ? Number(persisted.leftPaneWidth)
+        : 520;
+      let collapsedFolders = new Set(Array.isArray(persisted.collapsedFolders)
+        ? persisted.collapsedFolders
+        : []);
       let dragStart = null;
 
       window.addEventListener('message', function (event) {
@@ -716,6 +771,7 @@ function renderWebview(webview) {
           vscode.postMessage({ type: 'refresh' });
         });
         elements.splitter.addEventListener('pointerdown', startResize);
+        elements.splitter.addEventListener('dblclick', resetPaneWidth);
         elements.splitter.addEventListener('keydown', resizeWithKeyboard);
         window.addEventListener('resize', applyPaneSize);
       }
@@ -739,9 +795,9 @@ function renderWebview(webview) {
         }
 
         const rect = elements.shell.getBoundingClientRect();
-        const maxLeft = Math.max(260, rect.width - 366);
-        const next = clamp(event.clientX - rect.left, 260, maxLeft);
-        setLeftPaneSize(next + 'px');
+        const maxLeft = maxLeftPaneWidth(rect);
+        const next = clamp(event.clientX - rect.left, minLeftPaneWidth, maxLeft);
+        setLeftPaneWidth(next);
       }
 
       function stopResize(event) {
@@ -758,7 +814,7 @@ function renderWebview(webview) {
         elements.splitter.removeEventListener('pointermove', moveResize);
         elements.splitter.removeEventListener('pointerup', stopResize);
         elements.splitter.removeEventListener('pointercancel', stopResize);
-        persistPaneSize();
+        persistUiState();
       }
 
       function resizeWithKeyboard(event) {
@@ -770,7 +826,7 @@ function renderWebview(webview) {
         event.preventDefault();
         const rect = elements.shell.getBoundingClientRect();
         const current = currentLeftPanePixels(rect);
-        const maxLeft = Math.max(260, rect.width - 366);
+        const maxLeft = maxLeftPaneWidth(rect);
         let next = current;
 
         if (event.key === 'ArrowLeft') {
@@ -778,17 +834,23 @@ function renderWebview(webview) {
         } else if (event.key === 'ArrowRight') {
           next = current + 24;
         } else if (event.key === 'Home') {
-          next = 260;
+          next = minLeftPaneWidth;
         } else if (event.key === 'End') {
           next = maxLeft;
         }
 
-        setLeftPaneSize(clamp(next, 260, maxLeft) + 'px');
-        persistPaneSize();
+        setLeftPaneWidth(clamp(next, minLeftPaneWidth, maxLeft));
+        persistUiState();
       }
 
-      function setLeftPaneSize(value) {
-        leftPaneSize = value;
+      function resetPaneWidth() {
+        leftPaneWidth = Math.round(elements.shell.getBoundingClientRect().width * 0.5);
+        applyPaneSize();
+        persistUiState();
+      }
+
+      function setLeftPaneWidth(value) {
+        leftPaneWidth = value;
         applyPaneSize();
       }
 
@@ -798,34 +860,27 @@ function renderWebview(webview) {
         }
 
         const rect = elements.shell.getBoundingClientRect();
-        let effectiveSize = leftPaneSize;
-
-        if (String(leftPaneSize).endsWith('px') && rect.width > 0) {
-          const maxLeft = Math.max(260, rect.width - 366);
-          effectiveSize = clamp(Number.parseFloat(leftPaneSize), 260, maxLeft) + 'px';
+        if (rect.width > 0) {
+          leftPaneWidth = clamp(leftPaneWidth, minLeftPaneWidth, maxLeftPaneWidth(rect));
         }
 
-        elements.shell.style.setProperty('--left-pane-size', effectiveSize);
+        elements.shell.style.setProperty('--left-pane-width', leftPaneWidth + 'px');
       }
 
-      function persistPaneSize() {
+      function persistUiState() {
         const nextState = Object.assign({}, vscode.getState() || {}, {
-          leftPaneSize: leftPaneSize
+          leftPaneWidth: leftPaneWidth,
+          collapsedFolders: Array.from(collapsedFolders)
         });
         vscode.setState(nextState);
       }
 
       function currentLeftPanePixels(shellRect) {
-        const value = String(leftPaneSize);
-        if (value.endsWith('px')) {
-          return Number.parseFloat(value);
-        }
+        return clamp(leftPaneWidth, minLeftPaneWidth, maxLeftPaneWidth(shellRect));
+      }
 
-        if (value.endsWith('%')) {
-          return shellRect.width * Number.parseFloat(value) / 100;
-        }
-
-        return shellRect.width * 0.4;
+      function maxLeftPaneWidth(shellRect) {
+        return Math.max(minLeftPaneWidth, shellRect.width - minRightPaneWidth - splitterWidth);
       }
 
       function clamp(value, min, max) {
@@ -877,16 +932,175 @@ function renderWebview(webview) {
           selectedPath = changes[0].path;
         }
 
+        const tree = buildChangeTree(changes);
+        const fragment = document.createDocumentFragment();
+
+        tree.children.forEach(function (node) {
+          appendTreeNode(fragment, node, 0);
+        });
+
+        elements['changes-list'].appendChild(fragment);
+      }
+
+      function buildChangeTree(changes) {
+        const root = folderNode('', '');
+
         changes.forEach(function (change) {
-          elements['changes-list'].appendChild(fileRow(change));
+          const parts = String(change.path || '').split('/').filter(Boolean);
+          let parent = root;
+          let currentPath = '';
+
+          parts.slice(0, -1).forEach(function (part) {
+            currentPath = currentPath ? currentPath + '/' + part : part;
+
+            if (!parent.folders.has(part)) {
+              const child = folderNode(part, currentPath);
+              parent.folders.set(part, child);
+              parent.children.push(child);
+            }
+
+            parent = parent.folders.get(part);
+          });
+
+          parent.children.push({
+            type: 'file',
+            name: parts[parts.length - 1] || change.path,
+            path: change.path,
+            change: change,
+            fileCount: 1,
+            stagedCount: change.staged ? 1 : 0
+          });
+        });
+
+        finalizeFolder(root);
+        return root;
+      }
+
+      function folderNode(name, path) {
+        return {
+          type: 'folder',
+          name: name,
+          path: path,
+          folders: new Map(),
+          children: [],
+          fileCount: 0,
+          stagedCount: 0
+        };
+      }
+
+      function finalizeFolder(node) {
+        node.fileCount = 0;
+        node.stagedCount = 0;
+
+        node.children.forEach(function (child) {
+          if (child.type === 'folder') {
+            finalizeFolder(child);
+          }
+
+          node.fileCount += child.fileCount;
+          node.stagedCount += child.stagedCount;
+        });
+
+        node.children.sort(function (left, right) {
+          if (left.type === 'folder' && right.type !== 'folder') {
+            return -1;
+          }
+
+          if (left.type !== 'folder' && right.type === 'folder') {
+            return 1;
+          }
+
+          return left.name.localeCompare(right.name);
         });
       }
 
-      function fileRow(change) {
+      function appendTreeNode(parent, node, depth) {
+        if (node.type === 'folder') {
+          parent.appendChild(folderRow(node, depth));
+
+          if (isFolderExpanded(node)) {
+            node.children.forEach(function (child) {
+              appendTreeNode(parent, child, depth + 1);
+            });
+          }
+
+          return;
+        }
+
+        parent.appendChild(fileRow(node.change, depth));
+      }
+
+      function folderRow(node, depth) {
         const row = document.createElement('div');
-        row.className = 'file-row' + (change.path === selectedPath ? ' selected' : '');
+        const expanded = isFolderExpanded(node);
+        const allChecked = node.fileCount > 0 && node.stagedCount === node.fileCount;
+        const partiallyChecked = node.stagedCount > 0 && node.stagedCount < node.fileCount;
+
+        row.className = 'tree-row folder-row';
+        row.style.paddingLeft = treePadding(depth);
+        row.title = node.path + '\\n' + node.stagedCount + '/' + node.fileCount + ' checked';
+
+        const disclosure = document.createElement('button');
+        disclosure.className = 'disclosure-button';
+        disclosure.type = 'button';
+        disclosure.title = expanded ? 'Collapse folder' : 'Expand folder';
+        disclosure.textContent = expanded ? '\\u25BE' : '\\u25B8';
+        disclosure.addEventListener('click', function (event) {
+          event.stopPropagation();
+          toggleFolder(node.path);
+        });
+
+        const checkbox = document.createElement('input');
+        checkbox.className = 'file-checkbox';
+        checkbox.type = 'checkbox';
+        checkbox.checked = allChecked;
+        checkbox.indeterminate = partiallyChecked;
+        checkbox.disabled = Boolean(state.busy);
+        checkbox.addEventListener('click', function (event) {
+          event.stopPropagation();
+        });
+        checkbox.addEventListener('change', function (event) {
+          vscode.postMessage({
+            type: 'toggleChanges',
+            paths: collectFilePaths(node),
+            checked: event.target.checked
+          });
+        });
+
+        const icon = document.createElement('span');
+        icon.className = 'folder-icon';
+        icon.textContent = '\\u25A3';
+
+        const name = document.createElement('span');
+        name.className = 'folder-main';
+        name.textContent = node.name;
+
+        const count = document.createElement('span');
+        count.className = 'folder-count';
+        count.textContent = node.stagedCount + '/' + node.fileCount;
+
+        row.appendChild(disclosure);
+        row.appendChild(checkbox);
+        row.appendChild(icon);
+        row.appendChild(name);
+        row.appendChild(count);
+        row.addEventListener('click', function () {
+          toggleFolder(node.path);
+        });
+
+        return row;
+      }
+
+      function fileRow(change, depth) {
+        const row = document.createElement('div');
+        row.className = 'tree-row file-row' + (change.path === selectedPath ? ' selected' : '');
+        row.style.paddingLeft = treePadding(depth);
         row.title = change.path + '\\n' + (change.staged ? 'Checked / staged' : 'Unchecked / unstaged');
         row.dataset.path = change.path;
+
+        const spacer = document.createElement('span');
+        spacer.className = 'disclosure-button';
+        spacer.setAttribute('aria-hidden', 'true');
 
         const checkbox = document.createElement('input');
         checkbox.className = 'file-checkbox';
@@ -925,6 +1139,7 @@ function renderWebview(webview) {
 
         main.appendChild(name);
         main.appendChild(dir);
+        row.appendChild(spacer);
         row.appendChild(checkbox);
         row.appendChild(status);
         row.appendChild(main);
@@ -938,6 +1153,33 @@ function renderWebview(webview) {
         });
 
         return row;
+      }
+
+      function isFolderExpanded(node) {
+        return !collapsedFolders.has(node.path);
+      }
+
+      function toggleFolder(path) {
+        if (collapsedFolders.has(path)) {
+          collapsedFolders.delete(path);
+        } else {
+          collapsedFolders.add(path);
+        }
+
+        persistUiState();
+        renderChanges();
+      }
+
+      function collectFilePaths(node) {
+        if (node.type === 'file') {
+          return [node.path];
+        }
+
+        return node.children.flatMap(collectFilePaths);
+      }
+
+      function treePadding(depth) {
+        return 7 + depth * 18 + 'px';
       }
 
       function renderCommitPanel() {
