@@ -7,6 +7,8 @@ const { renderWebview, resolveActiveFileIconTheme } = require('./src/webview');
 
 const VIEW_ID = 'phpstormGitPanel.changes';
 const VIRTUAL_SCHEME = 'phpstorm-git-panel';
+const COMMIT_LANGUAGE_STORAGE_KEY = 'commitLanguage';
+const COMMIT_LANGUAGE_OPTIONS = new Set(['auto', 'en', 'ru']);
 
 class PhpStormCommitPanelProvider {
   constructor(context) {
@@ -16,6 +18,10 @@ class PhpStormCommitPanelProvider {
     this.pendingStagingOperations = 0;
     this.refreshing = false;
     this.view = undefined;
+    const commitLanguage = normalizeCommitLanguage(
+      this.context.globalState.get(COMMIT_LANGUAGE_STORAGE_KEY, 'auto')
+    );
+
     this.state = {
       repositories: [],
       selectedRoot: undefined,
@@ -23,7 +29,8 @@ class PhpStormCommitPanelProvider {
       changes: [],
       message: '',
       amend: false,
-      lastCommit: 'last commit',
+      lastCommit: '',
+      commitLanguage,
       busy: false,
       busyText: '',
       statusText: 'Open a folder with a Git repository.',
@@ -103,6 +110,9 @@ class PhpStormCommitPanelProvider {
         this.state.amend = Boolean(message.amend);
         this.postState();
         return;
+      case 'setCommitLanguage':
+        await this.setCommitLanguage(message.language);
+        return;
       case 'toggleChange':
         await this.toggleChange(String(message.path ?? ''), Boolean(message.checked));
         return;
@@ -175,7 +185,7 @@ class PhpStormCommitPanelProvider {
           selectedRoot: undefined,
           repoName: '',
           changes: [],
-          lastCommit: 'last commit',
+          lastCommit: '',
           statusText: 'Open a folder with a Git repository.',
           stagedCount: 0,
           totalCount: 0,
@@ -382,7 +392,8 @@ class PhpStormCommitPanelProvider {
       const generated = await generateCommitMessageWithLanguageModel({
         diff,
         changes: this.state.changes.filter((change) => change.staged),
-        lastCommit: this.state.lastCommit
+        lastCommit: this.state.lastCommit,
+        commitLanguage: this.state.commitLanguage
       });
 
       this.state.message = generated;
@@ -486,6 +497,18 @@ class PhpStormCommitPanelProvider {
     return this.state.changes.find((change) => change.path === relativePath);
   }
 
+  async setCommitLanguage(language) {
+    const commitLanguage = normalizeCommitLanguage(language);
+
+    this.state = {
+      ...this.state,
+      commitLanguage
+    };
+
+    await this.context.globalState.update(COMMIT_LANGUAGE_STORAGE_KEY, commitLanguage);
+    this.postState();
+  }
+
   async enqueueOperation(label, operation, options = {}) {
     const refreshAfter = options.refreshAfter !== false;
     this.clearScheduledRefresh();
@@ -578,7 +601,7 @@ class GitVirtualDocumentProvider {
   }
 }
 
-async function generateCommitMessageWithLanguageModel({ diff, changes, lastCommit }) {
+async function generateCommitMessageWithLanguageModel({ diff, changes, lastCommit, commitLanguage }) {
   if (!vscode.lm?.selectChatModels || !vscode.LanguageModelChatMessage) {
     throw new Error('VS Code Language Model API is not available in this VS Code build.');
   }
@@ -610,8 +633,9 @@ async function generateCommitMessageWithLanguageModel({ diff, changes, lastCommi
     '- Return only the commit message text.',
     '- Do not wrap the answer in quotes, markdown, or code fences.',
     '- Do not mention AI or tooling.',
+    `- ${formatCommitLanguageInstruction(commitLanguage)}`,
     '',
-    `Last commit: ${lastCommit || 'none'}`,
+    `Previous commit for style context: ${lastCommit || 'none'}`,
     '',
     'Staged files:',
     files || '- staged files unavailable',
@@ -671,6 +695,23 @@ function sanitizeGeneratedCommitMessage(value) {
   lines[0] = stripWrappingQuotes(lines[0].trim());
 
   return lines.slice(0, 12).join('\n').trim();
+}
+
+function normalizeCommitLanguage(language) {
+  const value = String(language || 'auto').trim().toLowerCase();
+
+  return COMMIT_LANGUAGE_OPTIONS.has(value) ? value : 'auto';
+}
+
+function formatCommitLanguageInstruction(language) {
+  switch (normalizeCommitLanguage(language)) {
+    case 'en':
+      return 'Write the commit message in English.';
+    case 'ru':
+      return 'Write the natural-language commit message text in Russian; keep conventional commit prefixes, scopes, file names, commands, and code identifiers unchanged.';
+    default:
+      return 'Use the repository commit history language when it is clear; otherwise write the commit message in English.';
+  }
 }
 
 function stripWrappingQuotes(value) {
@@ -776,6 +817,8 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
+  formatCommitLanguageInstruction,
+  normalizeCommitLanguage,
   PhpStormCommitPanelProvider,
   sanitizeGeneratedCommitMessage
 };

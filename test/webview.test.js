@@ -124,6 +124,31 @@ function run() {
   );
   assert.match(
     html,
+    /<button id="last-commit" class="last-commit" title="Previous commit" hidden><\/button>/,
+    'commit header must not show the old previous-commit placeholder label'
+  );
+  assert.doesNotMatch(
+    html,
+    new RegExp('>last' + ' commit', 'i'),
+    'commit header must not render the old visible previous-commit placeholder'
+  );
+  assert.match(
+    html,
+    /<select id="commit-language" class="language-select"[\s\S]*?<option value="auto">Auto<\/option>[\s\S]*?<option value="en">English<\/option>[\s\S]*?<option value="ru">Русский<\/option>/,
+    'Generate control row must include a commit message language selector'
+  );
+  assert.match(
+    html,
+    /type: 'setCommitLanguage', language: event\.target\.value/,
+    'language selector changes must be sent to the extension host'
+  );
+  assert.match(
+    html,
+    /elements\['commit-language'\]\.disabled = Boolean\(state\.busy\);/,
+    'language selector must stay available as a setting and only be disabled while the panel is busy'
+  );
+  assert.match(
+    html,
     /showDirectory: true/,
     'flat list mode must show each file directory beside the file name'
   );
@@ -215,6 +240,18 @@ function run() {
   assert.ok(
     extensionSource.includes('localResourceRoots.push(fileIconTheme.extensionUri);'),
     'webview must allow image resources from the active icon theme extension'
+  );
+  assert.ok(
+    extensionSource.includes("const COMMIT_LANGUAGE_STORAGE_KEY = 'commitLanguage';"),
+    'commit message language choice must be persisted in extension state'
+  );
+  assert.ok(
+    extensionSource.includes('formatCommitLanguageInstruction(commitLanguage)'),
+    'language selector value must affect the Language Model prompt'
+  );
+  assert.ok(
+    extensionSource.includes('Write the natural-language commit message text in Russian'),
+    'Russian commit message generation must be explicitly supported'
   );
   assert.ok(
     webviewSource.includes('findIconThemeInExtensionRoots(activeThemeId)'),

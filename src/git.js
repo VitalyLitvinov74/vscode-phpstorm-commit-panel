@@ -197,9 +197,9 @@ async function getStagedDiff(root) {
 async function getLastCommitSummary(root) {
   try {
     const output = await execGit(root, ['log', '-1', '--pretty=format:%h %s']);
-    return output.trim() || 'last commit';
+    return output.trim();
   } catch {
-    return 'last commit';
+    return '';
   }
 }
 

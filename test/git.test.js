@@ -19,6 +19,7 @@ const {
 
 async function run() {
   testParser();
+  await testNoLastCommitPlaceholder();
   await testGitStagingRoundTrip();
 }
 
@@ -41,6 +42,22 @@ function testParser() {
   assert.equal(byPath.get('staged-new.txt').staged, true);
   assert.equal(byPath.get('renamed-new.txt').staged, true);
   assert.equal(byPath.get('renamed-new.txt').originalPath, 'renamed-old.txt');
+}
+
+async function testNoLastCommitPlaceholder() {
+  const tempRoot = path.join(os.tmpdir(), 'phpstorm-git-panel-empty-history-test');
+  ensureSafeTempRoot(tempRoot);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+  fs.mkdirSync(tempRoot, { recursive: true });
+
+  try {
+    await execGit(tempRoot, ['init']);
+
+    const lastCommit = await getLastCommitSummary(tempRoot);
+    assert.equal(lastCommit, '');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 async function testGitStagingRoundTrip() {

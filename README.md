@@ -16,9 +16,8 @@ This VS Code extension adds a separate Activity Bar view with a split commit wor
 - Theme-safe Activity Bar icon for dark VS Code themes.
 - Checkbox staging: checked means `git add`, unchecked means `git restore --staged`.
 - `Commit` and `Commit and Push...` buttons inside the panel.
-- `Amend` support for updating the last commit.
-- Last commit summary in the commit header.
-- AI commit message generation through the VS Code Language Model API, using GitHub Copilot Chat or another installed VS Code language model provider when available.
+- `Amend` support for updating the previous commit.
+- AI commit message generation through the VS Code Language Model API, with a panel language selector for Auto, English, or Russian output.
 - Works with local and remote VS Code extension hosts, including WSL, when installed in that host.
 
 ## Why this exists
@@ -39,6 +38,8 @@ Requirements:
 - VS Code with Language Model API support.
 - GitHub Copilot Chat or another VS Code language model provider signed in and enabled.
 - At least one checked/staged change.
+
+Use the language selector beside `Generate` to choose Auto, English, or Russian commit message generation.
 
 VS Code may ask for permission the first time the extension sends a language model request.
 

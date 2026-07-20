@@ -653,10 +653,33 @@ function renderWebview(webview, fileIconThemeSource) {
       white-space: nowrap;
     }
 
+    .last-commit[hidden] {
+      display: none;
+    }
+
     .header-icon {
       width: 28px;
       height: 26px;
       color: var(--muted);
+    }
+
+    .language-select {
+      height: 26px;
+      min-width: 92px;
+      padding: 0 6px;
+      color: var(--text);
+      background: var(--vscode-dropdown-background, var(--vscode-button-secondaryBackground, transparent));
+      border: 1px solid var(--vscode-dropdown-border, var(--border-soft));
+      border-radius: 4px;
+      outline: none;
+    }
+
+    .language-select:focus {
+      border-color: var(--accent);
+    }
+
+    .language-select:disabled {
+      opacity: 0.45;
     }
 
     .ai-button {
@@ -870,13 +893,18 @@ function renderWebview(webview, fileIconThemeSource) {
 
     <section class="right" aria-label="Commit">
       <div class="commit-header">
-        <label class="amend-label" title="Amend the last commit">
+        <label class="amend-label" title="Amend previous commit">
           <input id="amend" type="checkbox">
           <span>Amend</span>
         </label>
-        <button id="last-commit" class="last-commit" title="Last commit">last commit&#x2304;</button>
+        <button id="last-commit" class="last-commit" title="Previous commit" hidden></button>
         <span class="spacer"></span>
         <button id="history" class="header-icon" title="History">&#x25F7;</button>
+        <select id="commit-language" class="language-select" title="Commit message language" aria-label="Commit message language">
+          <option value="auto">Auto</option>
+          <option value="en">English</option>
+          <option value="ru">Русский</option>
+        </select>
         <button id="generate" class="ai-button" title="Generate commit message with VS Code Language Model API">Generate</button>
       </div>
 
@@ -911,6 +939,7 @@ function renderWebview(webview, fileIconThemeSource) {
         changes: [],
         message: '',
         amend: false,
+        commitLanguage: 'auto',
         busy: false,
         statusText: 'Loading...',
         stagedCount: 0,
@@ -966,6 +995,7 @@ function renderWebview(webview, fileIconThemeSource) {
           'amend',
           'last-commit',
           'history',
+          'commit-language',
           'generate',
           'message',
           'busy-overlay',
@@ -1012,6 +1042,9 @@ function renderWebview(webview, fileIconThemeSource) {
         });
         elements.amend.addEventListener('change', function (event) {
           vscode.postMessage({ type: 'setAmend', amend: event.target.checked });
+        });
+        elements['commit-language'].addEventListener('change', function (event) {
+          vscode.postMessage({ type: 'setCommitLanguage', language: event.target.value });
         });
         elements.generate.addEventListener('click', function () {
           vscode.postMessage({ type: 'generateCommitMessage' });
@@ -1617,7 +1650,11 @@ function renderWebview(webview, fileIconThemeSource) {
         }
 
         elements.amend.checked = Boolean(state.amend);
-        elements['last-commit'].textContent = (state.lastCommit || 'last commit') + '\\u2304';
+        const previousCommit = String(state.lastCommit || '').trim();
+        elements['last-commit'].hidden = !previousCommit;
+        elements['last-commit'].textContent = previousCommit ? previousCommit + '\\u2304' : '';
+        elements['last-commit'].title = previousCommit || 'Previous commit';
+        elements['commit-language'].value = normalizeCommitLanguage(state.commitLanguage);
         elements['busy-overlay'].classList.toggle('visible', Boolean(state.busy));
         elements['busy-text'].textContent = state.busyText || 'Loading...';
 
@@ -1628,6 +1665,7 @@ function renderWebview(webview, fileIconThemeSource) {
         elements.commit.disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements['commit-push'].disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements.generate.disabled = Boolean(state.busy) || !hasRepo || !state.canGenerate;
+        elements['commit-language'].disabled = Boolean(state.busy);
         elements['stage-all'].disabled = Boolean(state.busy) || !hasRepo || !hasChanges;
         elements['unstage-all'].disabled = Boolean(state.busy) || !hasRepo || state.stagedCount === 0;
         elements['view-mode-toggle'].disabled = !hasRepo || !hasChanges;
@@ -1638,6 +1676,10 @@ function renderWebview(webview, fileIconThemeSource) {
 
         elements['footer-status'].textContent = state.errorText || state.statusText || '';
         elements['footer-status'].classList.toggle('error', Boolean(state.errorText));
+      }
+
+      function normalizeCommitLanguage(language) {
+        return ['auto', 'en', 'ru'].includes(language) ? language : 'auto';
       }
 
       function renderViewModeControls() {
