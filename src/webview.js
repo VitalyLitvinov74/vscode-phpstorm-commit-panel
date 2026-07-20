@@ -159,13 +159,15 @@ function renderWebview(webview) {
     }
 
     .toolbar {
+      position: relative;
       display: flex;
       align-items: center;
-      gap: 2px;
+      gap: 0;
       min-width: 0;
-      padding: 3px 6px;
+      overflow: visible;
+      padding: 3px 7px;
       border-bottom: 1px solid var(--border-soft);
-      background: color-mix(in srgb, var(--panel-bg) 90%, var(--editor-bg) 10%);
+      background: color-mix(in srgb, var(--panel-bg) 82%, var(--editor-bg) 18%);
     }
 
     .toolbar .spacer,
@@ -173,27 +175,111 @@ function renderWebview(webview) {
       flex: 1;
     }
 
+    .toolbar-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+      min-width: 0;
+    }
+
     .tool-button {
-      width: 23px;
+      position: relative;
+      width: 24px;
       height: 22px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       line-height: 1;
+      border-radius: 3px;
     }
 
     .tool-button:hover:not(:disabled) {
       color: var(--text);
     }
 
+    .tool-button.active {
+      color: var(--text);
+      background: color-mix(in srgb, var(--surface-hover) 70%, transparent);
+    }
+
+    .tool-button.active::after {
+      content: '';
+      position: absolute;
+      right: 3px;
+      bottom: 2px;
+      left: 3px;
+      height: 1px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+
     .tool-separator {
       width: 1px;
-      height: 18px;
-      margin: 0 5px;
+      height: 17px;
+      margin: 0 7px;
       background: var(--border-soft);
+    }
+
+    .toolbar-menu {
+      position: absolute;
+      z-index: 10;
+      top: 30px;
+      left: 184px;
+      width: 284px;
+      padding: 9px 10px 10px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--editor-bg) 88%, var(--panel-bg) 12%);
+      border: 1px solid color-mix(in srgb, var(--border-soft) 75%, transparent);
+      border-radius: 7px;
+      box-shadow: 0 8px 24px color-mix(in srgb, black 36%, transparent);
+    }
+
+    .toolbar-menu[hidden] {
+      display: none;
+    }
+
+    .menu-section-title {
+      padding: 4px 8px 5px;
+      color: color-mix(in srgb, var(--muted) 84%, transparent);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: none;
+    }
+
+    .menu-item {
+      width: 100%;
+      height: 25px;
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px;
+      padding: 0 8px;
+      color: var(--text);
+      border-radius: 4px;
+      text-align: left;
+    }
+
+    .menu-item.selected {
+      color: var(--surface-active-fg);
+      background: color-mix(in srgb, var(--surface-active) 86%, var(--accent) 14%);
+    }
+
+    .menu-check {
+      color: inherit;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .menu-shortcut {
+      color: color-mix(in srgb, currentColor 78%, transparent);
+      font-size: 11px;
+    }
+
+    .menu-item:disabled {
+      opacity: 0.62;
     }
 
     .repo-select {
@@ -626,14 +712,38 @@ function renderWebview(webview) {
 <body>
   <main id="shell" class="shell">
     <section class="left" aria-label="Changes">
-      <div class="toolbar">
-        <button id="refresh" class="tool-button" title="Refresh">&#x21BB;</button>
-        <button id="unstage-all" class="tool-button" title="Uncheck all changes">&minus;</button>
-        <button id="stage-all" class="tool-button" title="Check all changes">+</button>
+      <div id="changes-toolbar" class="toolbar">
+        <div class="toolbar-group" aria-label="Repository actions">
+          <button id="refresh" class="tool-button" title="Refresh changes">&#x21BB;</button>
+          <button id="unstage-all" class="tool-button" title="Uncheck all changes">&minus;</button>
+          <button id="stage-all" class="tool-button" title="Check all changes">+</button>
+        </div>
         <span class="tool-separator" aria-hidden="true"></span>
-        <button id="open-selected" class="tool-button" title="Open selected change">&#x25CE;</button>
+        <div class="toolbar-group" aria-label="View actions">
+          <button id="open-selected" class="tool-button active" title="Open selected change diff">&#x25C9;</button>
+          <button id="group-menu" class="tool-button" title="Group and show options" aria-haspopup="menu" aria-expanded="false">&#x25A4;</button>
+        </div>
+        <span class="tool-separator" aria-hidden="true"></span>
+        <div class="toolbar-group" aria-label="Tree actions">
+          <button id="expand-all" class="tool-button" title="Expand all directories">&#x2304;</button>
+          <button id="collapse-all" class="tool-button" title="Collapse all directories">&#x2303;</button>
+        </div>
         <span class="spacer"></span>
         <select id="repo-select" class="repo-select" title="Repository"></select>
+        <div id="view-menu" class="toolbar-menu" role="menu" hidden>
+          <div class="menu-section-title">Group By</div>
+          <button id="group-directory" class="menu-item selected" type="button" role="menuitemcheckbox" aria-checked="true">
+            <span class="menu-check">&#x2713;</span>
+            <span>Directory</span>
+            <span class="menu-shortcut">Ctrl+Alt+P</span>
+          </button>
+          <div class="menu-section-title">Show</div>
+          <button id="show-ignored" class="menu-item" type="button" role="menuitemcheckbox" aria-checked="false" disabled>
+            <span class="menu-check"></span>
+            <span>Ignored Files</span>
+            <span class="menu-shortcut"></span>
+          </button>
+        </div>
       </div>
       <div class="changes-header">
         <span class="disclosure" aria-hidden="true">&#x25BE;</span>
@@ -723,10 +833,17 @@ function renderWebview(webview) {
         [
           'shell',
           'splitter',
+          'changes-toolbar',
           'refresh',
           'unstage-all',
           'stage-all',
           'open-selected',
+          'group-menu',
+          'expand-all',
+          'collapse-all',
+          'view-menu',
+          'group-directory',
+          'show-ignored',
           'repo-select',
           'changes-count',
           'changes-summary',
@@ -762,6 +879,18 @@ function renderWebview(webview) {
             vscode.postMessage({ type: 'openDiff', path: selectedPath });
           }
         });
+        elements['group-menu'].addEventListener('click', function (event) {
+          event.stopPropagation();
+          toggleViewMenu();
+        });
+        elements['view-menu'].addEventListener('click', function (event) {
+          event.stopPropagation();
+        });
+        elements['group-directory'].addEventListener('click', function () {
+          closeViewMenu();
+        });
+        elements['expand-all'].addEventListener('click', expandAllFolders);
+        elements['collapse-all'].addEventListener('click', collapseAllFolders);
         elements['repo-select'].addEventListener('change', function (event) {
           vscode.postMessage({ type: 'selectRepository', root: event.target.value });
         });
@@ -794,6 +923,12 @@ function renderWebview(webview) {
         elements.splitter.addEventListener('pointerdown', startResize);
         elements.splitter.addEventListener('dblclick', resetPaneWidth);
         elements.splitter.addEventListener('keydown', resizeWithKeyboard);
+        document.addEventListener('click', closeViewMenu);
+        document.addEventListener('keydown', function (event) {
+          if (event.key === 'Escape') {
+            closeViewMenu();
+          }
+        });
         window.addEventListener('resize', applyPaneSize);
       }
 
@@ -923,6 +1058,44 @@ function renderWebview(webview) {
         renderCommitPanel();
       }
 
+      function toggleViewMenu() {
+        const menu = elements['view-menu'];
+        const isOpen = !menu.hidden;
+
+        if (isOpen) {
+          closeViewMenu();
+          return;
+        }
+
+        positionViewMenu();
+        menu.hidden = false;
+        elements['group-menu'].setAttribute('aria-expanded', 'true');
+        elements['group-menu'].classList.add('active');
+      }
+
+      function closeViewMenu() {
+        if (!elements['view-menu'] || elements['view-menu'].hidden) {
+          return;
+        }
+
+        elements['view-menu'].hidden = true;
+        elements['group-menu'].setAttribute('aria-expanded', 'false');
+        elements['group-menu'].classList.remove('active');
+      }
+
+      function positionViewMenu() {
+        const toolbarRect = elements['changes-toolbar'].getBoundingClientRect();
+        const buttonRect = elements['group-menu'].getBoundingClientRect();
+        const menuWidth = 284;
+        const left = clamp(
+          Math.round(buttonRect.left - toolbarRect.left - 8),
+          4,
+          Math.max(4, Math.round(toolbarRect.width - menuWidth - 4))
+        );
+
+        elements['view-menu'].style.left = left + 'px';
+      }
+
       function renderRepositories() {
         const select = elements['repo-select'];
         const repositories = state.repositories || [];
@@ -970,6 +1143,47 @@ function renderWebview(webview) {
         });
 
         elements['changes-list'].appendChild(fragment);
+      }
+
+      function expandAllFolders() {
+        if (!state.selectedRoot || (state.changes || []).length === 0) {
+          return;
+        }
+
+        collapsedFolders.clear();
+        persistUiState();
+        renderChanges();
+      }
+
+      function collapseAllFolders() {
+        const paths = collectFolderPaths();
+
+        if (paths.length === 0) {
+          return;
+        }
+
+        collapsedFolders = new Set(paths);
+        persistUiState();
+        renderChanges();
+      }
+
+      function collectFolderPaths() {
+        const tree = buildChangeTree(state.changes || []);
+        const paths = [];
+
+        tree.children.forEach(function walk(node) {
+          if (node.type !== 'folder') {
+            return;
+          }
+
+          if (node.path) {
+            paths.push(node.path);
+          }
+
+          node.children.forEach(walk);
+        });
+
+        return paths;
       }
 
       function buildChangeTree(changes) {
@@ -1241,12 +1455,17 @@ function renderWebview(webview) {
 
         const hasMessage = textarea.value.trim().length > 0;
         const hasRepo = Boolean(state.selectedRoot);
+        const hasChanges = (state.totalCount || 0) > 0;
+        const hasFolders = hasChanges && collectFolderPaths().length > 0;
         elements.commit.disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements['commit-push'].disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
         elements.generate.disabled = Boolean(state.busy) || !hasRepo || !state.canGenerate;
-        elements['stage-all'].disabled = Boolean(state.busy) || !hasRepo || state.totalCount === 0;
+        elements['stage-all'].disabled = Boolean(state.busy) || !hasRepo || !hasChanges;
         elements['unstage-all'].disabled = Boolean(state.busy) || !hasRepo || state.stagedCount === 0;
         elements['open-selected'].disabled = Boolean(state.busy) || !selectedPath;
+        elements['group-menu'].disabled = !hasRepo;
+        elements['expand-all'].disabled = !hasFolders;
+        elements['collapse-all'].disabled = !hasFolders;
 
         elements['footer-status'].textContent = state.errorText || state.statusText || '';
         elements['footer-status'].classList.toggle('error', Boolean(state.errorText));

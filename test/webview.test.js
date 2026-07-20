@@ -35,6 +35,36 @@ function run() {
     /appearance:\s*none;/,
     'checkboxes must use the custom subdued checkbox style instead of the bright native accent'
   );
+  assert.match(
+    html,
+    /id="group-menu"/,
+    'changes toolbar must expose a PhpStorm-style group/show menu trigger'
+  );
+  assert.match(
+    html,
+    /<div class="menu-section-title">Group By<\/div>/,
+    'changes toolbar menu must include a Group By section'
+  );
+  assert.match(
+    html,
+    /<span>Directory<\/span>/,
+    'changes toolbar menu must show Directory grouping'
+  );
+  assert.match(
+    html,
+    /<div class="menu-section-title">Show<\/div>/,
+    'changes toolbar menu must include a Show section'
+  );
+  assert.match(
+    html,
+    /function expandAllFolders\(\)/,
+    'changes toolbar must include a real expand all tree action'
+  );
+  assert.match(
+    html,
+    /function collapseAllFolders\(\)/,
+    'changes toolbar must include a real collapse all tree action'
+  );
   assert.ok(!html.includes('accent-color: var(--blue);'), 'checkboxes must not use bright button blue');
   assert.ok(!html.includes('file-meta'), 'old wide file metadata column must not return');
   assert.ok(!html.includes('folder-icon'), 'old extra folder icon column must not return');
