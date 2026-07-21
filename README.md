@@ -21,10 +21,11 @@ This VS Code extension adds a separate Activity Bar view with a commit workflow 
 - Cleaner changes list with compact header, status badges, selection states, and empty state.
 - Theme-safe Activity Bar icon for dark VS Code themes.
 - Checkbox staging: checked means `git add`, unchecked means `git restore --staged`.
+- Optimistic checkbox updates and coordinated background refreshes keep focus, selection, and scrolling stable while Git is busy.
 - `Commit` and `Commit and Push...` buttons inside the panel.
 - `Amend` support for updating the previous commit.
 - AI commit message generation through the VS Code Language Model API, with a panel language selector for Auto, English, or Russian output.
-- Disables VS Code accessibility signal sounds for this host so opening and clicking diff lines stays silent.
+- Leaves the user's global VS Code accessibility and sound preferences unchanged.
 - Works with local and remote VS Code extension hosts, including WSL, when installed in that host.
 
 The eye and Preview Details toolbar assets come from the JetBrains Platform under
@@ -53,18 +54,19 @@ Use the language selector beside `Generate` to choose Auto, English, or Russian 
 
 VS Code may ask for permission the first time the extension sends a language model request.
 
-## Installation from source
+## Packaging and installation
 
-Clone the repository, then install the extension folder into VS Code:
+Clone the repository and package it as a VSIX with the VS Code Extension Manager:
 
 ```powershell
-code --install-extension .
+npx @vscode/vsce package
+code --install-extension .\phpstorm-git-panel-0.3.5.vsix
 ```
 
-For a WSL remote extension host:
+For a WSL remote extension host, install that VSIX into the target WSL window:
 
 ```powershell
-code --remote wsl+Ubuntu --install-extension .
+code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.3.5.vsix
 ```
 
 Reload VS Code after installation and open the `PhpStorm Git` Activity Bar item.
@@ -77,6 +79,7 @@ Reload VS Code after installation and open the `PhpStorm Git` Activity Bar item.
 - `PhpStorm Commit Panel: Generate Commit Message`
 - `PhpStorm Commit Panel: Commit Checked Changes`
 - `PhpStorm Commit Panel: Commit and Push Checked Changes`
+- `PhpStorm Commit Panel: Open PhpStorm Commit Panel Settings`
 
 ## Keywords
 

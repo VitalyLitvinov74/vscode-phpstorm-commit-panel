@@ -12,41 +12,393 @@ function resolveFolderCheckboxChecked(fileCount, fullyCheckedCount) {
   return total > 0 && checked < total;
 }
 
-function reconcileOptimisticStagingChanges(changes, optimisticStagingStates, confirmedRequestIds) {
-  const confirmed = new Set((Array.isArray(confirmedRequestIds) ? confirmedRequestIds : [])
+function mergeHostStatePatch(authoritativeState, incomingState, partial) {
+  const current = authoritativeState && typeof authoritativeState === 'object'
+    ? authoritativeState
+    : {};
+
+  if (!incomingState || typeof incomingState !== 'object') {
+    return current;
+  }
+
+  return partial
+    ? { ...current, ...incomingState }
+    : incomingState;
+}
+
+function reconcileVersionedField(
+  incomingState,
+  localState,
+  valueKey,
+  versionKey,
+  localVersion
+) {
+  const incomingVersionValue = Number(incomingState?.[versionKey]);
+  const incomingVersion = Number.isSafeInteger(incomingVersionValue)
+    && incomingVersionValue >= 0
+    ? incomingVersionValue
+    : 0;
+  const localVersionValue = Number(localVersion);
+  const normalizedLocalVersion = Number.isSafeInteger(localVersionValue)
+    && localVersionValue >= 0
+    ? localVersionValue
+    : 0;
+
+  if (incomingVersion >= normalizedLocalVersion) {
+    return { state: incomingState, version: incomingVersion };
+  }
+
+  return {
+    state: {
+      ...incomingState,
+      [valueKey]: localState?.[valueKey],
+      [versionKey]: normalizedLocalVersion
+    },
+    version: normalizedLocalVersion
+  };
+}
+
+function reconcileOptimisticStagingChanges(
+  changes,
+  optimisticStagingStates,
+  confirmedRequestIds,
+  failedRequestIds
+) {
+  const confirmedValues = (Array.isArray(confirmedRequestIds) ? confirmedRequestIds : [])
     .map((requestId) => String(requestId || ''))
-    .filter(Boolean));
+    .filter(Boolean);
+  const failedValues = (Array.isArray(failedRequestIds) ? failedRequestIds : [])
+    .map((requestId) => String(requestId || ''))
+    .filter(Boolean);
+  const confirmed = new Set(confirmedValues);
+  const failed = new Set(failedValues);
   const remaining = new Map();
 
   for (const [filePath, optimisticState] of optimisticStagingStates.entries()) {
-    if (!confirmed.has(String(optimisticState?.requestId || ''))) {
-      remaining.set(filePath, optimisticState);
+    const requestId = String(optimisticState?.requestId || '');
+
+    if (failed.has(requestId)
+      || confirmed.has(requestId)
+      || optimisticState?.confirmed) {
+      continue;
     }
+
+    remaining.set(filePath, optimisticState);
   }
 
   let hasOverlay = false;
-  const reconciledChanges = (Array.isArray(changes) ? changes : []).map((change) => {
-    const optimisticState = remaining.get(change.path);
+  const reconciledChanges = (Array.isArray(changes) ? changes : []).map(
+    (change) => {
+      const optimisticState = remaining.get(change.path);
 
-    if (!optimisticState) {
-      return change;
+      if (!optimisticState) {
+        return change;
+      }
+
+      const checked = Boolean(optimisticState.checked);
+      hasOverlay = true;
+      return {
+        ...change,
+        staged: checked,
+        hasStaged: checked,
+        hasUnstaged: !checked,
+        partiallyStaged: false
+      };
     }
-
-    const checked = Boolean(optimisticState.checked);
-    hasOverlay = true;
-    return {
-      ...change,
-      staged: checked,
-      hasStaged: checked,
-      hasUnstaged: !checked,
-      partiallyStaged: false
-    };
-  });
+  );
 
   return {
     changes: reconciledChanges,
     hasOverlay,
     optimisticStagingStates: remaining
+  };
+}
+
+function reconcileOptimisticHunkStates(
+  optimisticHunkStates,
+  confirmedRequestIds,
+  failedRequestIds,
+  diffPreview
+) {
+  const confirmed = new Set(
+    (Array.isArray(confirmedRequestIds) ? confirmedRequestIds : [])
+      .map((requestId) => String(requestId || ''))
+      .filter(Boolean)
+  );
+  const failed = new Set(
+    (Array.isArray(failedRequestIds) ? failedRequestIds : [])
+      .map((requestId) => String(requestId || ''))
+      .filter(Boolean)
+  );
+  const remaining = new Map();
+
+  for (const [requestKey, optimisticState] of optimisticHunkStates.entries()) {
+    const requestId = String(requestKey || '');
+
+    if (failed.has(requestId)
+      || confirmed.has(requestId)
+      || optimisticState?.confirmed) {
+      continue;
+    }
+
+    const previewHunkExists = diffPreview?.path === optimisticState?.path
+      && (diffPreview.hunks || []).some(
+        (hunk) => hunk.id === optimisticState.hunkId
+      );
+
+    if (diffPreview?.path === optimisticState?.path && !previewHunkExists) {
+      continue;
+    }
+
+    remaining.set(requestId, optimisticState);
+  }
+
+  return remaining;
+}
+
+function synchronizeDiffPreviewWithChanges(currentState) {
+  const preview = currentState?.diffPreview;
+
+  if (!preview || !Array.isArray(currentState?.changes)) {
+    return currentState;
+  }
+
+  const change = currentState.changes.find(
+    (candidate) => candidate?.path === preview.path
+  );
+
+  if (!change || change.partiallyStaged) {
+    return currentState;
+  }
+
+  const checked = Boolean(change.staged);
+  const currentHunks = Array.isArray(preview.hunks) ? preview.hunks : [];
+  const includedCount = checked ? currentHunks.length : 0;
+  const alreadySynchronized = preview.fileIncluded === checked
+    && preview.filePartiallyIncluded === false
+    && preview.includedCount === includedCount
+    && currentHunks.every((hunk) => Boolean(hunk?.included) === checked);
+
+  if (alreadySynchronized) {
+    return currentState;
+  }
+
+  const hunks = currentHunks.map(
+    (hunk) => Boolean(hunk?.included) === checked
+      ? hunk
+      : { ...hunk, included: checked }
+  );
+
+  return {
+    ...currentState,
+    diffPreview: {
+      ...preview,
+      fileIncluded: checked,
+      filePartiallyIncluded: false,
+      hunks,
+      includedCount
+    }
+  };
+}
+
+function resolveHunkFocusIndex(hunks, focusTarget) {
+  const candidates = Array.isArray(hunks) ? hunks : [];
+
+  if (!focusTarget || candidates.length === 0) {
+    return -1;
+  }
+
+  const hunkId = String(focusTarget.hunkId || '');
+  let index = hunkId
+    ? candidates.findIndex((hunk) => String(hunk?.id || '') === hunkId)
+    : -1;
+
+  if (index >= 0) {
+    return index;
+  }
+
+  const rawPatch = String(focusTarget.rawPatch || '');
+
+  if (rawPatch) {
+    index = candidates.findIndex(
+      (hunk) => Array.isArray(hunk?.rawLines) && hunk.rawLines.join('\n') === rawPatch
+    );
+  }
+
+  if (index >= 0) {
+    return index;
+  }
+
+  const header = String(focusTarget.header || '');
+
+  if (header) {
+    index = candidates.findIndex((hunk) => String(hunk?.header || '') === header);
+  }
+
+  if (index >= 0) {
+    return index;
+  }
+
+  const previousIndex = Number(focusTarget.index);
+
+  return Number.isSafeInteger(previousIndex) && previousIndex >= 0
+    ? Math.min(previousIndex, candidates.length - 1)
+    : -1;
+}
+
+function planStateRender(previousState, nextState, previousSelectedPath, nextSelectedPath) {
+  const before = previousState || {};
+  const after = nextState || {};
+  const beforeSelection = String(previousSelectedPath || '');
+  const afterSelection = String(nextSelectedPath || '');
+
+  function same(left, right) {
+    return left === right;
+  }
+
+  function listSignature(items, projector) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return '';
+    }
+
+    return items.map(projector).join('\u0001');
+  }
+
+  function repositoriesSignature(currentState) {
+    return listSignature(
+      currentState.repositories,
+      function (repository) {
+        return [repository?.root, repository?.name].map(String).join('\u0002');
+      }
+    );
+  }
+
+  function changesSignature(currentState) {
+    const changes = listSignature(
+      currentState.changes,
+      function (change) {
+        return [
+          change?.path,
+          change?.originalPath,
+          change?.kind,
+          Boolean(change?.staged),
+          Boolean(change?.partiallyStaged),
+          Boolean(change?.untracked)
+        ].map(String).join('\u0002');
+      }
+    );
+    const ignored = listSignature(
+      currentState.ignoredFiles,
+      function (change) {
+        return String(change?.path || '');
+      }
+    );
+
+    return [
+      currentState.selectedRoot,
+      Boolean(currentState.showIgnored),
+      changes,
+      ignored
+    ].map(String).join('\u0003');
+  }
+
+  function diffSignature(currentState) {
+    const preview = currentState.diffPreview;
+    const blameEntries = Object.entries(preview?.blame || {});
+    const blame = listSignature(
+      blameEntries,
+      function (entry) {
+        return [entry[0], entry[1]].map(String).join('\u0002');
+      }
+    );
+    const hunks = listSignature(
+      preview?.hunks,
+      function (hunk) {
+        return [
+          hunk?.id,
+          Boolean(hunk?.included),
+          hunk?.canToggle !== false,
+          hunk?.header,
+          Array.isArray(hunk?.lines) ? hunk.lines.length : 0
+        ].map(String).join('\u0002');
+      }
+    );
+
+    return [
+      Boolean(currentState.diffPreviewEnabled),
+      Boolean(currentState.diffLoading),
+      currentState.showBlame,
+      currentState.diffIgnorePolicy,
+      currentState.lastCommit,
+      preview?.path,
+      preview?.source,
+      preview?.message,
+      Boolean(preview?.binary),
+      preview?.differenceCount,
+      preview?.includedCount,
+      Boolean(preview?.fileIncluded),
+      Boolean(preview?.filePartiallyIncluded),
+      preview?.canToggleFile,
+      preview?.canToggleHunks,
+      blame,
+      hunks
+    ].map(String).join('\u0003');
+  }
+
+  function commitSignature(currentState) {
+    return [
+      currentState.selectedRoot,
+      currentState.message,
+      Boolean(currentState.amend),
+      currentState.lastCommit,
+      currentState.commitLanguage,
+      Boolean(currentState.busy),
+      currentState.busyText,
+      currentState.errorText,
+      currentState.statusText,
+      currentState.stagedCount,
+      currentState.totalCount,
+      Boolean(currentState.canGenerate),
+      Array.isArray(currentState.confirmedStagingRequestIds)
+        ? currentState.confirmedStagingRequestIds.join('\u0002')
+        : '',
+      Array.isArray(currentState.failedStagingRequestIds)
+        ? currentState.failedStagingRequestIds.join('\u0002')
+        : ''
+    ].map(String).join('\u0003');
+  }
+
+  const rootChanged = String(before.selectedRoot || '') !== String(after.selectedRoot || '');
+  const repositoriesUnchanged = same(before.repositories, after.repositories);
+  const changesInputsUnchanged = !rootChanged
+    && same(before.showIgnored, after.showIgnored)
+    && same(before.changes, after.changes)
+    && same(before.ignoredFiles, after.ignoredFiles);
+  const changesChanged = changesInputsUnchanged
+    ? false
+    : !same(changesSignature(before), changesSignature(after));
+  const selectionChanged = beforeSelection !== afterSelection;
+  const diffInputsUnchanged = same(before.diffPreview, after.diffPreview)
+    && same(before.diffPreviewEnabled, after.diffPreviewEnabled)
+    && same(before.diffLoading, after.diffLoading)
+    && same(before.showBlame, after.showBlame)
+    && same(before.diffIgnorePolicy, after.diffIgnorePolicy)
+    && same(before.lastCommit, after.lastCommit);
+
+  return {
+    layout: Boolean(before.diffPreviewEnabled) !== Boolean(after.diffPreviewEnabled),
+    repositories: rootChanged
+      || (!repositoriesUnchanged
+        && !same(repositoriesSignature(before), repositoriesSignature(after))),
+    changes: changesChanged,
+    selection: selectionChanged && !changesChanged,
+    commit: changesChanged
+      || selectionChanged
+      || !same(commitSignature(before), commitSignature(after)),
+    diff: rootChanged
+      || selectionChanged
+      || (!diffInputsUnchanged
+        && !same(diffSignature(before), diffSignature(after)))
   };
 }
 
@@ -57,7 +409,13 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
   const showActionIcon = renderActionIcon(actionIcons.show, '');
   const previewDetailsActionIcon = renderActionIcon(actionIcons.previewDetails, '');
   const folderCheckboxResolverSource = resolveFolderCheckboxChecked.toString();
+  const hostStateMergeSource = mergeHostStatePatch.toString();
+  const versionedFieldReconciliationSource = reconcileVersionedField.toString();
   const stagingReconciliationSource = reconcileOptimisticStagingChanges.toString();
+  const hunkReconciliationSource = reconcileOptimisticHunkStates.toString();
+  const diffPreviewSynchronizationSource = synchronizeDiffPreviewWithChanges.toString();
+  const hunkFocusIndexResolverSource = resolveHunkFocusIndex.toString();
+  const stateRenderPlannerSource = planStateRender.toString();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1543,9 +1901,21 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       const vscode = acquireVsCodeApi();
       const activeFileIcons = ${serializeForScript(activeFileIcons)};
       ${folderCheckboxResolverSource}
+      ${hostStateMergeSource}
+      ${versionedFieldReconciliationSource}
       ${stagingReconciliationSource}
+      ${hunkReconciliationSource}
+      ${diffPreviewSynchronizationSource}
+      ${hunkFocusIndexResolverSource}
+      ${stateRenderPlannerSource}
       const elements = {};
       const persisted = vscode.getState() || {};
+      const persistedMessage = typeof persisted.message === 'string' ? persisted.message : '';
+      const persistedMessageVersionValue = Number(persisted.messageVersion);
+      const persistedMessageVersion = Number.isSafeInteger(persistedMessageVersionValue)
+        && persistedMessageVersionValue >= 0
+        ? persistedMessageVersionValue
+        : 0;
       const layoutVersion = 4;
       const hasPersistedPaneWidth = persisted.layoutVersion === layoutVersion
         && Number.isFinite(Number(persisted.leftPaneWidth));
@@ -1559,14 +1929,17 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         diffPreview: undefined,
         diffLoading: false,
         diffIgnorePolicy: 'none',
-        message: '',
+        message: persistedMessage,
+        messageVersion: persistedMessageVersion,
         amend: false,
+        amendVersion: 0,
         commitLanguage: 'auto',
         busy: false,
         statusText: 'Loading...',
         stagedCount: 0,
         totalCount: 0
       };
+      let hostState = state;
       const minLeftPaneWidth = 280;
       const minRightPaneWidth = 320;
       const splitterWidth = 12;
@@ -1591,86 +1964,248 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       let showBlame = persisted.showBlame === true;
       let activeHunkIndex = 0;
       let changesResizeStart = null;
-      let pendingConfirmationAction = '';
+      let pendingConfirmation = null;
       let changesPaneHeight = Number.isFinite(Number(persisted.changesPaneHeight))
         ? Number(persisted.changesPaneHeight)
         : 0;
       let leftPaneWidth = hasPersistedPaneWidth
         ? Number(persisted.leftPaneWidth)
         : 0;
-      let collapsedFolders = new Set(Array.isArray(persisted.collapsedFolders)
+      const collapsedFoldersByRoot = Object.assign(
+        {},
+        persisted.collapsedFoldersByRoot && typeof persisted.collapsedFoldersByRoot === 'object'
+          ? persisted.collapsedFoldersByRoot
+          : {}
+      );
+      let collapsedFoldersRoot = typeof persisted.collapsedFoldersRoot === 'string'
+        ? persisted.collapsedFoldersRoot
+        : '';
+      const legacyCollapsedFolders = Array.isArray(persisted.collapsedFolders)
         ? persisted.collapsedFolders
-        : []);
+        : [];
+      let collapsedFolders = new Set(
+        Array.isArray(collapsedFoldersByRoot[collapsedFoldersRoot])
+          ? collapsedFoldersByRoot[collapsedFoldersRoot]
+          : legacyCollapsedFolders
+      );
       let dragStart = null;
       let lastRenderedChangesRoot = '';
+      let lastRenderedDiffPath = '';
+      let hasRenderedState = false;
       let localRenderFrame = 0;
-      let stagingDebounceTimer = 0;
-      const stagingDebounceDelayMs = 350;
-      const pendingStagingStates = new Map();
+      const localRenderPaths = new Set();
+      let scrollRestoreFrame = 0;
+      let scrollRestoreTarget = null;
+      let diffScrollRestoreFrame = 0;
+      let paneSizeFrame = 0;
+      let localMessageVersion = persistedMessageVersion;
+      let localAmendVersion = 0;
+      let pendingSelectedPath = '';
+      let pendingRepositorySelection = null;
       const optimisticStagingStates = new Map();
-      const stagingRequestSession = ${serializeForScript(nonce)};
-      let stagingRequestSequence = 0;
-      let pendingStagingRequestId = '';
+      const optimisticHunkStates = new Map();
+      let pendingHunkFocus = null;
+      const requestSession = ${serializeForScript(nonce)};
+      let requestSequence = 0;
 
-      window.addEventListener('message', function (event) {
-        if (event.data && event.data.type === 'state') {
-          const nextState = event.data.state || state;
-          const sameRoot = Boolean(state.selectedRoot)
-            && state.selectedRoot === nextState.selectedRoot;
-          const stateWithOverlay = sameRoot
-            ? applyOptimisticStagingOverlay(nextState)
-            : nextState;
-          const shouldKeepScroll = sameRoot
-            && elements['changes-list'];
-          const scrollTop = shouldKeepScroll ? captureChangesListScrollTop() : null;
-          const nextSelectedPath = typeof stateWithOverlay.selectedPath === 'string'
-            ? stateWithOverlay.selectedPath
-            : '';
-          const keepLocalSelection = sameRoot
-            && !nextSelectedPath
-            && Boolean(selectedPath)
-            && (stateWithOverlay.changes || []).some(function (change) {
-              return change.path === selectedPath;
-            });
+      window.addEventListener(
+        'message',
+        function (event) {
+          if (event.data && event.data.type === 'state') {
+            const previousState = state;
+            const previousSelectedPath = selectedPath;
+            const mergedHostState = mergeHostStatePatch(
+              hostState,
+              event.data.state,
+              event.data.partial
+            );
+            const nextState = synchronizeDiffPreviewWithChanges(mergedHostState);
+            hostState = nextState;
+            const sameRoot = Boolean(previousState.selectedRoot)
+              && previousState.selectedRoot === nextState.selectedRoot;
+            const settledHunkFocus = sameRoot
+              ? takeSettledHunkFocus(nextState)
+              : null;
+            const pendingHunkRequestIdsBefore = Array.from(optimisticHunkStates.keys()).join('\\u0001');
+            let stateWithOverlay = sameRoot
+              ? applyOptimisticStagingOverlay(nextState)
+              : nextState;
+            const pendingHunkRequestsChanged = pendingHunkRequestIdsBefore
+              !== Array.from(optimisticHunkStates.keys()).join('\\u0001');
+            const nextMessageVersion = normalizeMessageVersion(stateWithOverlay.messageVersion);
+            const settledRepositorySelectionRequestId = String(
+              stateWithOverlay.settledRepositorySelectionRequestId || ''
+            );
+            const repositorySelectionSettled = Boolean(pendingRepositorySelection)
+              && pendingRepositorySelection.requestId === settledRepositorySelectionRequestId;
 
-          if (!sameRoot) {
-            clearPendingStagingChanges();
-            optimisticStagingStates.clear();
+            if (repositorySelectionSettled) {
+              pendingRepositorySelection = null;
+            }
+
+            if (nextMessageVersion < localMessageVersion) {
+              stateWithOverlay = {
+                ...stateWithOverlay,
+                message: state.message,
+                messageVersion: localMessageVersion
+              };
+            } else {
+              const incomingMessage = String(stateWithOverlay.message || '');
+              const draftChanged = nextMessageVersion !== localMessageVersion
+                || incomingMessage !== String(state.message || '');
+              localMessageVersion = nextMessageVersion;
+
+              if (draftChanged) {
+                persistCommitDraft(incomingMessage, localMessageVersion);
+              }
+            }
+
+            const amendReconciliation = reconcileVersionedField(
+              stateWithOverlay,
+              state,
+              'amend',
+              'amendVersion',
+              localAmendVersion
+            );
+            stateWithOverlay = amendReconciliation.state;
+            localAmendVersion = amendReconciliation.version;
+
+            const nextSelectedPath = typeof stateWithOverlay.selectedPath === 'string'
+              ? stateWithOverlay.selectedPath
+              : '';
+            const nextChanges = stateWithOverlay.changes || [];
+            let keepLocalSelection = false;
+
+            if (!sameRoot) {
+              optimisticStagingStates.clear();
+              optimisticHunkStates.clear();
+              pendingHunkFocus = null;
+              pendingSelectedPath = '';
+              cancelLocalStagingRender();
+              cancelDiffScrollRestore();
+              lastRenderedDiffPath = '';
+              switchCollapsedFolderScope(stateWithOverlay.selectedRoot || '');
+            } else if (pendingSelectedPath) {
+              const pendingSelectionExists = nextChanges.some(
+                function (change) {
+                  return change.path === pendingSelectedPath;
+                }
+              );
+
+              if (nextSelectedPath === pendingSelectedPath) {
+                pendingSelectedPath = '';
+              } else if (pendingSelectionExists && selectedPath === pendingSelectedPath) {
+                keepLocalSelection = true;
+              } else {
+                pendingSelectedPath = '';
+              }
+            }
+
+            const selectedPathStillExists = nextChanges.some(
+              function (change) {
+                return change.path === selectedPath;
+              }
+            );
+
+            if (!keepLocalSelection
+              && sameRoot
+              && !nextSelectedPath
+              && Boolean(selectedPath)
+              && selectedPathStillExists) {
+              keepLocalSelection = true;
+            }
+
+            state = keepLocalSelection
+              ? { ...stateWithOverlay, selectedPath: selectedPath }
+              : stateWithOverlay;
+            showIgnored = Boolean(stateWithOverlay.showIgnored);
+            diffPreviewVisible = Boolean(stateWithOverlay.diffPreviewEnabled);
+            showBlame = Boolean(stateWithOverlay.showBlame);
+            diffIgnorePolicy = ['none', 'trim', 'all', 'all-and-empty', 'formatting'].includes(stateWithOverlay.diffIgnorePolicy)
+              ? stateWithOverlay.diffIgnorePolicy
+              : diffIgnorePolicy;
+
+            if (!keepLocalSelection) {
+              selectedPath = nextSelectedPath;
+            }
+
+            const renderPlan = planStateRender(
+              previousState,
+              state,
+              previousSelectedPath,
+              selectedPath
+            );
+            if (repositorySelectionSettled) {
+              renderPlan.repositories = true;
+              renderPlan.commit = true;
+            }
+            if (pendingHunkRequestsChanged) {
+              renderPlan.commit = true;
+            }
+            if (!hasRenderedState) {
+              Object.assign(
+                renderPlan,
+                {
+                  layout: true,
+                  repositories: true,
+                  changes: true,
+                  selection: false,
+                  commit: true,
+                  diff: true
+                }
+              );
+              hasRenderedState = true;
+            }
+            const scrollTop = sameRoot && renderPlan.changes && elements['changes-list']
+              ? captureChangesListScrollTop()
+              : null;
+            const changesFocus = sameRoot && renderPlan.changes
+              ? captureChangesListFocus()
+              : null;
+            render(
+              renderPlan,
+              {
+                changesScrollTop: scrollTop,
+                changesFocus: changesFocus,
+                previousSelectedPath: previousSelectedPath
+              }
+            );
+            restoreSettledHunkFocus(settledHunkFocus);
           }
-
-          state = keepLocalSelection
-            ? Object.assign({}, stateWithOverlay, { selectedPath: selectedPath })
-            : stateWithOverlay;
-          showIgnored = Boolean(stateWithOverlay.showIgnored);
-          diffPreviewVisible = Boolean(stateWithOverlay.diffPreviewEnabled);
-          showBlame = Boolean(stateWithOverlay.showBlame);
-          diffIgnorePolicy = ['none', 'trim', 'all', 'all-and-empty', 'formatting'].includes(stateWithOverlay.diffIgnorePolicy)
-            ? stateWithOverlay.diffIgnorePolicy
-            : diffIgnorePolicy;
-
-          if (!keepLocalSelection) {
-            selectedPath = nextSelectedPath;
-          }
-          render({ changesScrollTop: scrollTop });
         }
-      });
+      );
 
-      document.addEventListener('DOMContentLoaded', function () {
-        cacheElements();
-        applyPaneSize();
-        applyPreviewLayout();
-        bindEvents();
-        vscode.postMessage({
-          type: 'ready',
-          ui: {
-            showIgnored: showIgnored,
-            diffPreviewEnabled: diffPreviewVisible,
-            selectedPath: persisted.selectedPath || '',
-            diffIgnorePolicy: diffIgnorePolicy,
-            showBlame: showBlame
-          }
-        });
-      });
+      document.addEventListener(
+        'DOMContentLoaded',
+        function () {
+          cacheElements();
+          applyLayoutSize();
+          applyPreviewLayout();
+          bindEvents();
+          const restoredMessage = String(state.message || '');
+          elements.message.value = restoredMessage;
+          renderCommitMessageControls();
+          vscode.postMessage(
+            {
+              type: 'setMessage',
+              message: restoredMessage,
+              messageVersion: localMessageVersion
+            }
+          );
+          vscode.postMessage(
+            {
+              type: 'ready',
+              ui: {
+                showIgnored: showIgnored,
+                diffPreviewEnabled: diffPreviewVisible,
+                selectedPath: persisted.selectedPath || '',
+                diffIgnorePolicy: diffIgnorePolicy,
+                showBlame: showBlame
+              }
+            }
+          );
+        }
+      );
 
       function cacheElements() {
         [
@@ -1768,10 +2303,10 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           );
         });
         elements['stage-all'].addEventListener('click', function () {
-          vscode.postMessage({ type: 'stageAll' });
+          vscode.postMessage({ type: 'stageAll', root: state.selectedRoot });
         });
         elements['unstage-all'].addEventListener('click', function () {
-          vscode.postMessage({ type: 'unstageAll' });
+          vscode.postMessage({ type: 'unstageAll', root: state.selectedRoot });
         });
         elements['view-options'].addEventListener('click', function (event) {
           event.stopPropagation();
@@ -1798,7 +2333,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements['diff-preview-toggle'].addEventListener('click', toggleDiffPreview);
         elements['open-selected-diff'].addEventListener('click', openSelectedDiff);
         elements['locate-active-file'].addEventListener('click', function () {
-          vscode.postMessage({ type: 'locateActiveFile' });
+          vscode.postMessage({ type: 'locateActiveFile', root: state.selectedRoot });
         });
         elements['expand-all'].addEventListener('click', expandAllFolders);
         elements['collapse-all'].addEventListener('click', collapseAllFolders);
@@ -1809,27 +2344,94 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           setLocalChecked(paths, checked);
           queueStagingChanges(paths, checked);
         });
-        elements['repo-select'].addEventListener('change', function (event) {
-          vscode.postMessage({ type: 'selectRepository', root: event.target.value });
-        });
+        elements['repo-select'].addEventListener(
+          'change',
+          function (event) {
+            const root = String(event.target.value || '');
+            const requestId = nextRequestId();
+            pendingRepositorySelection = {
+              root: root,
+              requestId: requestId
+            };
+            renderCommitPanel();
+            updateInteractiveState();
+            vscode.postMessage(
+              {
+                type: 'selectRepository',
+                root: root,
+                requestId: requestId
+              }
+            );
+          }
+        );
         elements.amend.addEventListener('change', function (event) {
-          vscode.postMessage({ type: 'setAmend', amend: event.target.checked });
+          localAmendVersion = Math.max(
+            localAmendVersion,
+            normalizeMessageVersion(state.amendVersion)
+          ) + 1;
+          state = Object.assign(
+            {},
+            state,
+            {
+              amend: event.target.checked,
+              amendVersion: localAmendVersion
+            }
+          );
+          vscode.postMessage(
+            {
+              type: 'setAmend',
+              root: state.selectedRoot,
+              amend: event.target.checked,
+              amendVersion: localAmendVersion
+            }
+          );
         });
         elements['commit-language'].addEventListener('change', function (event) {
           vscode.postMessage({ type: 'setCommitLanguage', language: event.target.value });
         });
         elements.generate.addEventListener('click', function () {
-          vscode.postMessage({ type: 'generateCommitMessage' });
+          vscode.postMessage({ type: 'generateCommitMessage', root: state.selectedRoot });
         });
-        elements.message.addEventListener('input', function (event) {
-          vscode.postMessage({ type: 'setMessage', message: event.target.value });
-        });
-        elements.commit.addEventListener('click', function () {
-          vscode.postMessage({ type: 'commit' });
-        });
-        elements['commit-push'].addEventListener('click', function () {
-          vscode.postMessage({ type: 'commitAndPush' });
-        });
+        elements.message.addEventListener(
+          'input',
+          function (event) {
+            const message = String(event.target.value || '');
+            localMessageVersion = Math.max(
+              localMessageVersion,
+              normalizeMessageVersion(state.messageVersion)
+            );
+            localMessageVersion += 1;
+            state = Object.assign(
+              {},
+              state,
+              {
+                message: message,
+                messageVersion: localMessageVersion
+              }
+            );
+            renderCommitMessageControls();
+            vscode.postMessage(
+              {
+                type: 'setMessage',
+                message: message,
+                messageVersion: localMessageVersion
+              }
+            );
+            persistCommitDraft(message, localMessageVersion);
+          }
+        );
+        elements.commit.addEventListener(
+          'click',
+          function () {
+            vscode.postMessage({ type: 'commit', root: state.selectedRoot });
+          }
+        );
+        elements['commit-push'].addEventListener(
+          'click',
+          function () {
+            vscode.postMessage({ type: 'commitAndPush', root: state.selectedRoot });
+          }
+        );
         elements.settings.addEventListener('click', function () {
           vscode.postMessage({ type: 'openSettings' });
         });
@@ -1855,7 +2457,9 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements['diff-next-file'].addEventListener('click', function () { moveToFile(1); });
         elements['diff-edit-source'].addEventListener('click', function () {
           if (selectedPath) {
-            vscode.postMessage({ type: 'openFile', path: selectedPath });
+            vscode.postMessage(
+              { type: 'openFile', root: state.selectedRoot, path: selectedPath }
+            );
           }
         });
         elements['diff-open-native'].addEventListener('click', openSelectedDiff);
@@ -1903,17 +2507,29 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           vscode.postMessage({ type: 'setDiffBlame', enabled: showBlame });
         });
         elements['confirm-cancel'].addEventListener('click', closeConfirmation);
-        elements['confirm-accept'].addEventListener('click', function () {
-          if (pendingConfirmationAction && selectedPath) {
-            vscode.postMessage({ type: pendingConfirmationAction, path: selectedPath });
+        elements['confirm-accept'].addEventListener(
+          'click',
+          function () {
+            const confirmation = pendingConfirmation;
+
+            if (confirmation && state.selectedRoot === confirmation.root) {
+              vscode.postMessage(
+                {
+                  type: confirmation.action,
+                  root: confirmation.root,
+                  path: confirmation.path
+                }
+              );
+            }
+            closeConfirmation();
           }
-          closeConfirmation();
-        });
+        );
         elements.splitter.addEventListener('pointerdown', startResize);
         elements.splitter.addEventListener('dblclick', resetPaneWidth);
         elements.splitter.addEventListener('keydown', resizeWithKeyboard);
         elements['commit-splitter'].addEventListener('pointerdown', startChangesResize);
         elements['commit-splitter'].addEventListener('keydown', resizeChangesWithKeyboard);
+        elements['changes-list'].addEventListener('scroll', handleChangesListScroll, { passive: true });
         document.addEventListener('click', closeAllMenus);
         document.addEventListener('keydown', function (event) {
           if (event.key === 'Escape') {
@@ -1941,13 +2557,16 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
             moveToFile(1);
           }
         });
-        window.addEventListener('resize', applyPaneSize);
+        window.addEventListener('resize', scheduleLayoutSize);
       }
 
       function startResize(event) {
         event.preventDefault();
+        const rect = elements.shell.getBoundingClientRect();
         dragStart = {
-          pointerId: event.pointerId
+          pointerId: event.pointerId,
+          left: rect.left,
+          maxLeft: maxLeftPaneWidth(rect)
         };
         elements.splitter.classList.add('dragging');
         document.body.classList.add('resizing');
@@ -1962,9 +2581,11 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           return;
         }
 
-        const rect = elements.shell.getBoundingClientRect();
-        const maxLeft = maxLeftPaneWidth(rect);
-        const next = clamp(event.clientX - rect.left, minLeftPaneWidth, maxLeft);
+        const next = clamp(
+          event.clientX - dragStart.left,
+          minLeftPaneWidth,
+          dragStart.maxLeft
+        );
         setLeftPaneWidth(next);
       }
 
@@ -1982,6 +2603,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements.splitter.removeEventListener('pointermove', moveResize);
         elements.splitter.removeEventListener('pointerup', stopResize);
         elements.splitter.removeEventListener('pointercancel', stopResize);
+        flushLayoutSize();
         persistUiState();
       }
 
@@ -2012,22 +2634,50 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       }
 
       function resetPaneWidth() {
-        leftPaneWidth = defaultLeftPaneWidth(elements.shell.getBoundingClientRect());
-        applyPaneSize();
+        const rect = elements.shell.getBoundingClientRect();
+        leftPaneWidth = defaultLeftPaneWidth(rect);
+        applyLayoutSize(rect);
         persistUiState();
       }
 
       function setLeftPaneWidth(value) {
         leftPaneWidth = value;
-        applyPaneSize();
+        scheduleLayoutSize();
       }
 
-      function applyPaneSize() {
+      function scheduleLayoutSize() {
+        if (paneSizeFrame) {
+          return;
+        }
+
+        paneSizeFrame = requestFrame(
+          function () {
+            paneSizeFrame = 0;
+            applyLayoutSize();
+          }
+        );
+      }
+
+      function flushLayoutSize() {
+        if (paneSizeFrame) {
+          cancelFrame(paneSizeFrame);
+          paneSizeFrame = 0;
+        }
+
+        applyLayoutSize();
+      }
+
+      function applyLayoutSize(shellRect) {
         if (!elements.shell) {
           return;
         }
 
-        const rect = elements.shell.getBoundingClientRect();
+        const rect = shellRect || elements.shell.getBoundingClientRect();
+        applyPaneSize(rect);
+        applyChangesPaneSize(rect);
+      }
+
+      function applyPaneSize(rect) {
         if (rect.width > 0) {
           if (!leftPaneWidth) {
             leftPaneWidth = defaultLeftPaneWidth(rect);
@@ -2039,11 +2689,30 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements.shell.style.setProperty('--left-pane-width', leftPaneWidth + 'px');
       }
 
+      function requestFrame(callback) {
+        return typeof window.requestAnimationFrame === 'function'
+          ? window.requestAnimationFrame(callback)
+          : window.setTimeout(callback, 0);
+      }
+
+      function cancelFrame(frame) {
+        if (typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(frame);
+        } else {
+          window.clearTimeout(frame);
+        }
+      }
+
       function persistUiState() {
-        const nextState = Object.assign({}, vscode.getState() || {}, {
+        saveCollapsedFolderScope();
+        const persistedState = vscode.getState() || {};
+        const nextState = {
+          ...persistedState,
           layoutVersion: layoutVersion,
           leftPaneWidth: leftPaneWidth,
           collapsedFolders: Array.from(collapsedFolders),
+          collapsedFoldersByRoot: Object.assign({}, collapsedFoldersByRoot),
+          collapsedFoldersRoot: collapsedFoldersRoot,
           viewMode: viewMode,
           showIgnored: showIgnored,
           diffPreviewVisible: diffPreviewVisible,
@@ -2059,9 +2728,47 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           showBreadcrumbs: showBreadcrumbs,
           showBlame: showBlame,
           changesCollapsed: changesCollapsed,
-          changesPaneHeight: changesPaneHeight
-        });
+          changesPaneHeight: changesPaneHeight,
+          message: String(state.message || ''),
+          messageVersion: localMessageVersion
+        };
         vscode.setState(nextState);
+      }
+
+      function persistCommitDraft(message, messageVersion) {
+        const persistedState = vscode.getState() || {};
+        vscode.setState(
+          {
+            ...persistedState,
+            message: String(message || ''),
+            messageVersion: normalizeMessageVersion(messageVersion)
+          }
+        );
+      }
+
+      function saveCollapsedFolderScope() {
+        if (collapsedFoldersRoot) {
+          collapsedFoldersByRoot[collapsedFoldersRoot] = Array.from(collapsedFolders);
+        }
+      }
+
+      function switchCollapsedFolderScope(nextRoot) {
+        const normalizedRoot = String(nextRoot || '');
+
+        if (normalizedRoot === collapsedFoldersRoot) {
+          return;
+        }
+
+        saveCollapsedFolderScope();
+        const scopedFolders = collapsedFoldersByRoot[normalizedRoot];
+        collapsedFolders = new Set(
+          Array.isArray(scopedFolders)
+            ? scopedFolders
+            : collapsedFoldersRoot
+              ? []
+              : legacyCollapsedFolders
+        );
+        collapsedFoldersRoot = normalizedRoot;
       }
 
       function currentLeftPanePixels(shellRect) {
@@ -2080,14 +2787,123 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         return Math.min(Math.max(value, min), max);
       }
 
-      function render(options) {
-        applyPreviewLayout();
-        renderRepositories();
-        renderChanges({
-          scrollTop: options ? options.changesScrollTop : null
-        });
-        renderCommitPanel();
-        renderDiffPreview();
+      function render(renderPlan, options) {
+        const plan = renderPlan || {
+          layout: true,
+          repositories: true,
+          changes: true,
+          selection: false,
+          commit: true,
+          diff: true
+        };
+
+        if (plan.layout) {
+          applyPreviewLayout();
+        }
+        if (plan.repositories) {
+          renderRepositories();
+        }
+        if (plan.changes) {
+          cancelLocalStagingRender();
+          renderChanges(
+            {
+              scrollTop: options ? options.changesScrollTop : null,
+              focus: options ? options.changesFocus : null
+            }
+          );
+        } else if (plan.selection) {
+          renderSelection(options?.previousSelectedPath || '', selectedPath);
+        }
+        if (plan.commit) {
+          renderCommitPanel();
+          updateInteractiveState();
+        }
+        if (plan.diff) {
+          renderDiffPreview();
+        }
+      }
+
+      function renderSelection(previousPath, nextPath) {
+        if (previousPath === nextPath || !elements['changes-list']) {
+          return;
+        }
+
+        const rows = elements['changes-list'].querySelectorAll('.file-row[data-path]');
+        rows.forEach(
+          function (row) {
+            row.classList.toggle('selected', row.dataset.path === nextPath);
+          }
+        );
+      }
+
+      function updateInteractiveState() {
+        const busy = isGitInteractionBusy();
+        const changes = state.changes || [];
+        elements['repo-select'].disabled = busy;
+        elements['changes-root-checkbox'].disabled = busy || changes.length === 0;
+        const changeCheckboxes = elements['changes-list'].querySelectorAll(
+          '.folder-row > .file-checkbox, .file-row:not(.ignored-row) > .file-checkbox'
+        );
+        changeCheckboxes.forEach(
+          function (checkbox) {
+            checkbox.disabled = busy;
+          }
+        );
+
+        const preview = currentDiffPreview();
+        elements['diff-file-checkbox'].disabled = busy
+          || !preview?.canToggleFile
+          || !selectedPath;
+        const hunkCheckboxes = elements['diff-content'].querySelectorAll(
+          '.diff-hunk-header > .file-checkbox'
+        );
+        hunkCheckboxes.forEach(
+          function (checkbox, index) {
+            const hunk = preview?.hunks?.[index];
+            checkbox.disabled = busy
+              || !preview?.canToggleHunks
+              || hunk?.canToggle === false
+              || isHunkStagingPending(hunk?.id);
+          }
+        );
+      }
+
+      function isGitInteractionBusy() {
+        return Boolean(state.busy) || Boolean(pendingRepositorySelection);
+      }
+
+      function isHunkStagingPending(hunkId) {
+        if (!hunkId) {
+          return false;
+        }
+
+        return Array.from(optimisticHunkStates.values()).some(
+          function (optimisticState) {
+            return optimisticState.root === state.selectedRoot
+              && optimisticState.path === selectedPath
+              && optimisticState.hunkId === hunkId;
+          }
+        );
+      }
+
+      function takeSettledHunkFocus(nextState) {
+        if (!pendingHunkFocus) {
+          return null;
+        }
+
+        const requestId = pendingHunkFocus.requestId;
+        const confirmed = Array.isArray(nextState.confirmedStagingRequestIds)
+          && nextState.confirmedStagingRequestIds.includes(requestId);
+        const failed = Array.isArray(nextState.failedStagingRequestIds)
+          && nextState.failedStagingRequestIds.includes(requestId);
+
+        if (!confirmed && !failed) {
+          return null;
+        }
+
+        const focusTarget = pendingHunkFocus;
+        pendingHunkFocus = null;
+        return focusTarget;
       }
 
       function toggleViewMenu() {
@@ -2137,10 +2953,6 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         applyPreviewLayout();
         renderDiffPreview();
         vscode.postMessage({ type: 'setDiffPreviewEnabled', enabled: diffPreviewVisible });
-
-        if (diffPreviewVisible && selectedPath) {
-          vscode.postMessage({ type: 'selectChange', path: selectedPath });
-        }
       }
 
       function applyPreviewLayout() {
@@ -2154,37 +2966,49 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements['diff-preview-toggle'].title = diffPreviewVisible ? 'Hide diff preview' : 'Show diff preview';
 
         if (changesPaneHeight > 0) {
-          elements.shell.style.setProperty('--changes-pane-height', changesPaneHeight + 'px');
+          scheduleLayoutSize();
         }
       }
 
       function selectPath(filePath) {
+        if (isGitInteractionBusy()) {
+          return;
+        }
+
         if (!(state.changes || []).some(function (change) { return change.path === filePath; })) {
           return;
         }
 
-        const changed = selectedPath !== filePath;
-        selectedPath = filePath;
-        persistUiState();
-
-        if (changed) {
-          activeHunkIndex = 0;
-          state = Object.assign({}, state, {
-            selectedPath: selectedPath,
-            diffLoading: diffPreviewVisible,
-            diffPreview: diffPreviewVisible ? undefined : state.diffPreview
-          });
+        if (selectedPath === filePath) {
+          return;
         }
 
-        renderChangesKeepingScroll();
+        const previousSelectedPath = selectedPath;
+        selectedPath = filePath;
+        pendingSelectedPath = filePath;
+        persistUiState();
+        activeHunkIndex = 0;
+        state = {
+          ...state,
+          selectedPath: selectedPath,
+          diffLoading: diffPreviewVisible,
+          diffPreview: diffPreviewVisible ? undefined : state.diffPreview
+        };
+
+        renderSelection(previousSelectedPath, selectedPath);
+        renderCommitPanel();
         renderDiffPreview();
 
-        vscode.postMessage({ type: 'selectChange', path: selectedPath });
+        vscode.postMessage(
+          { type: 'selectChange', root: state.selectedRoot, path: selectedPath }
+        );
       }
 
       function openSelectedDiff() {
-        if (selectedPath) {
-          vscode.postMessage({ type: 'openDiff', path: selectedPath });
+        if (!isGitInteractionBusy() && selectedPath) {
+          vscode.postMessage(
+            { type: 'openDiff', root: state.selectedRoot, path: selectedPath }
+          );
         }
       }
 
@@ -2215,11 +3039,18 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       }
 
       function openConfirmation(action, title, message) {
-        if (!selectedPath) {
+        const requestedRoot = state.selectedRoot;
+        const requestedPath = selectedPath;
+
+        if (!requestedRoot || !requestedPath) {
           return;
         }
 
-        pendingConfirmationAction = action;
+        pendingConfirmation = {
+          action: action,
+          root: requestedRoot,
+          path: requestedPath
+        };
         elements['confirm-title'].textContent = title;
         elements['confirm-message'].textContent = message;
         elements['confirm-dialog'].hidden = false;
@@ -2227,7 +3058,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       }
 
       function closeConfirmation() {
-        pendingConfirmationAction = '';
+        pendingConfirmation = null;
         elements['confirm-dialog'].hidden = true;
       }
 
@@ -2267,7 +3098,14 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         }
 
         event.preventDefault();
-        changesResizeStart = { pointerId: event.pointerId };
+        const rect = elements.shell.getBoundingClientRect();
+        const bounds = changesPaneBounds(rect);
+        changesResizeStart = {
+          pointerId: event.pointerId,
+          top: rect.top,
+          minimum: bounds.minimum,
+          maximum: bounds.maximum
+        };
         elements['commit-splitter'].classList.add('dragging');
         elements['commit-splitter'].setPointerCapture(event.pointerId);
         elements['commit-splitter'].addEventListener('pointermove', moveChangesResize);
@@ -2280,9 +3118,12 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           return;
         }
 
-        const rect = elements.shell.getBoundingClientRect();
-        changesPaneHeight = clamp(event.clientY - rect.top, 140, Math.max(140, rect.height - 162));
-        elements.shell.style.setProperty('--changes-pane-height', changesPaneHeight + 'px');
+        changesPaneHeight = clamp(
+          event.clientY - changesResizeStart.top,
+          changesResizeStart.minimum,
+          changesResizeStart.maximum
+        );
+        scheduleLayoutSize();
       }
 
       function stopChangesResize() {
@@ -2290,12 +3131,44 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           return;
         }
 
+        if (elements['commit-splitter'].hasPointerCapture(changesResizeStart.pointerId)) {
+          elements['commit-splitter'].releasePointerCapture(changesResizeStart.pointerId);
+        }
         changesResizeStart = null;
         elements['commit-splitter'].classList.remove('dragging');
         elements['commit-splitter'].removeEventListener('pointermove', moveChangesResize);
         elements['commit-splitter'].removeEventListener('pointerup', stopChangesResize);
         elements['commit-splitter'].removeEventListener('pointercancel', stopChangesResize);
+        flushLayoutSize();
         persistUiState();
+      }
+
+      function applyChangesPaneSize(rect) {
+        if (rect.height <= 0) {
+          return;
+        }
+
+        if (!changesPaneHeight) {
+          elements.shell.style.removeProperty('--changes-pane-height');
+          return;
+        }
+
+        const bounds = changesPaneBounds(rect);
+        const appliedChangesPaneHeight = clamp(
+          changesPaneHeight,
+          bounds.minimum,
+          bounds.maximum
+        );
+        elements.shell.style.setProperty('--changes-pane-height', appliedChangesPaneHeight + 'px');
+      }
+
+      function changesPaneBounds(rect) {
+        const maximum = Math.max(0, rect.height - 162);
+
+        return {
+          minimum: Math.min(140, maximum),
+          maximum: maximum
+        };
       }
 
       function resizeChangesWithKeyboard(event) {
@@ -2307,8 +3180,9 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
 
         event.preventDefault();
         const rect = elements.shell.getBoundingClientRect();
-        const minimum = 140;
-        const maximum = Math.max(minimum, rect.height - 162);
+        const bounds = changesPaneBounds(rect);
+        const minimum = bounds.minimum;
+        const maximum = bounds.maximum;
         const current = changesPaneHeight > 0
           ? changesPaneHeight
           : clamp(rect.height * 0.56, minimum, maximum);
@@ -2347,40 +3221,170 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         select.replaceChildren();
         select.hidden = repositories.length < 2;
 
-        repositories.forEach(function (repo) {
-          const option = document.createElement('option');
-          option.value = repo.root;
-          option.textContent = repo.name;
-          option.selected = repo.root === state.selectedRoot;
-          select.appendChild(option);
-        });
+        repositories.forEach(
+          function (repo) {
+            const option = document.createElement('option');
+            option.value = repo.root;
+            option.textContent = repo.name;
+            option.selected = repo.root === state.selectedRoot;
+            select.appendChild(option);
+          }
+        );
       }
 
       function renderChanges(options) {
         renderChangesWithScroll(options);
       }
 
-      function renderChangesKeepingScroll() {
-        renderChangesWithScroll({
-          scrollTop: captureChangesListScrollTop()
-        });
-      }
+      function scheduleLocalStagingRender(paths) {
+        paths.forEach(
+          function (filePath) {
+            localRenderPaths.add(filePath);
+          }
+        );
 
-      function scheduleLocalRender() {
         if (localRenderFrame) {
           return;
         }
 
-        const requestFrame = window.requestAnimationFrame || function (callback) {
-          return window.setTimeout(callback, 0);
-        };
+        localRenderFrame = requestFrame(
+          function () {
+            const changedPaths = new Set(localRenderPaths);
+            localRenderFrame = 0;
+            localRenderPaths.clear();
+            renderLocalStagingState(changedPaths);
+          }
+        );
+      }
 
-        localRenderFrame = requestFrame(function () {
+      function cancelLocalStagingRender() {
+        if (localRenderFrame) {
+          cancelFrame(localRenderFrame);
           localRenderFrame = 0;
-          renderChangesKeepingScroll();
-          renderCommitPanel();
-          renderDiffPreview();
-        });
+        }
+
+        localRenderPaths.clear();
+      }
+
+      function renderLocalStagingState(changedPaths) {
+        const changes = state.changes || [];
+        const changeEntries = changes.map(
+          function (change) {
+            return [change.path, change];
+          }
+        );
+        const changesByPath = new Map(changeEntries);
+        const foldersByPath = new Map();
+        const folderRows = elements['changes-list'].querySelectorAll('.folder-row[data-folder-path]');
+
+        if (folderRows.length > 0) {
+          const tree = buildChangeTree(changes);
+          tree.children.forEach(
+            function collectFolder(node) {
+              if (node.type !== 'folder') {
+                return;
+              }
+
+              foldersByPath.set(node.path, node);
+              node.children.forEach(collectFolder);
+            }
+          );
+        }
+
+        updateChangesRootState(changes);
+        const fileRows = elements['changes-list'].querySelectorAll('.file-row[data-path]');
+        fileRows.forEach(
+          function (row) {
+            const change = changesByPath.get(row.dataset.path);
+
+            if (!change || !changedPaths.has(change.path)) {
+              return;
+            }
+
+            const checkbox = row.querySelector('.file-checkbox');
+            checkbox.checked = Boolean(change.staged && !change.partiallyStaged);
+            checkbox.indeterminate = Boolean(change.partiallyStaged);
+            row.title = change.path + '\\n' + statusDescription(change) + ' / '
+              + (change.staged ? 'checked' : 'unchecked');
+          }
+        );
+        folderRows.forEach(
+          function (row) {
+            const folder = foldersByPath.get(row.dataset.folderPath);
+
+            if (!folder) {
+              return;
+            }
+
+            const checkbox = row.querySelector('.file-checkbox');
+            const allChecked = folder.fileCount > 0 && folder.stagedCount === folder.fileCount;
+            checkbox.checked = allChecked;
+            checkbox.indeterminate = !allChecked && folder.includedCount > 0;
+            row.querySelector('.folder-count').textContent = folder.includedCount + '/' + folder.fileCount;
+            row.title = folder.path + '\\n' + folder.includedCount + '/' + folder.fileCount + ' checked';
+          }
+        );
+
+        if (changedPaths.has(selectedPath)) {
+          renderLocalDiffStagingState();
+        }
+
+        renderCommitPanel();
+        updateInteractiveState();
+      }
+
+      function updateChangesRootState(changes) {
+        const allIncluded = changes.length > 0 && changes.every(
+          function (change) {
+            return change.staged && !change.partiallyStaged;
+          }
+        );
+        const anyIncluded = changes.some(function (change) { return change.staged; });
+        elements['changes-root-checkbox'].checked = allIncluded;
+        elements['changes-root-checkbox'].indeterminate = !allIncluded && anyIncluded;
+        elements['changes-root-checkbox'].disabled = isGitInteractionBusy() || changes.length === 0;
+      }
+
+      function renderLocalDiffStagingState() {
+        const preview = currentDiffPreview();
+
+        if (!preview) {
+          return;
+        }
+
+        const differences = preview.differenceCount || 0;
+        const included = preview.includedCount || 0;
+        elements['diff-stats'].textContent = differences
+          + (differences === 1 ? ' difference, ' : ' differences, ')
+          + included
+          + ' included';
+        elements['diff-file-checkbox'].checked = Boolean(preview.fileIncluded);
+        elements['diff-file-checkbox'].indeterminate = Boolean(preview.filePartiallyIncluded);
+        const hunkSections = elements['diff-content'].querySelectorAll('.diff-hunk');
+        hunkSections.forEach(
+          function (section, index) {
+            const hunk = preview.hunks?.[index];
+
+            if (!hunk) {
+              return;
+            }
+
+            const header = section.querySelector('.diff-hunk-header');
+            const checkbox = header?.querySelector('.file-checkbox');
+            const source = header?.querySelector('.diff-hunk-source');
+            header?.classList.toggle('included', Boolean(hunk.included));
+
+            if (checkbox) {
+              checkbox.checked = Boolean(hunk.included);
+              checkbox.title = hunk.included
+                ? 'Exclude this difference from commit'
+                : 'Include this difference in commit';
+            }
+            if (source) {
+              source.textContent = hunk.included ? 'Included changes' : 'Not included';
+            }
+          }
+        );
       }
 
       function renderChangesWithScroll(options) {
@@ -2390,6 +3394,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         const scrollTop = options && Number.isFinite(options.scrollTop)
           ? options.scrollTop
           : null;
+        const focusTarget = options?.focus || null;
         elements['changes-count'].textContent = String(state.totalCount || 0);
         elements['changes-summary'].textContent = state.busy
           ? 'updating...'
@@ -2400,35 +3405,39 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements['changes-root-toggle'].classList.toggle('collapsed', changesCollapsed);
         elements['changes-root-toggle'].title = changesCollapsed ? 'Expand changes' : 'Collapse changes';
         elements['changes-root-toggle'].setAttribute('aria-label', elements['changes-root-toggle'].title);
-        const allIncluded = changes.length > 0 && changes.every(function (change) {
-          return change.staged && !change.partiallyStaged;
-        });
-        const anyIncluded = changes.some(function (change) { return change.staged; });
-        elements['changes-root-checkbox'].checked = allIncluded;
-        elements['changes-root-checkbox'].indeterminate = !allIncluded && anyIncluded;
-        elements['changes-root-checkbox'].disabled = Boolean(state.busy) || changes.length === 0;
+        updateChangesRootState(changes);
         lastRenderedChangesRoot = selectedRoot;
 
         if (!state.selectedRoot) {
-          elements['changes-list'].appendChild(empty('No Git repository', 'Open a folder that contains a Git repository.'));
+          const noRepository = empty(
+            'No Git repository',
+            'Open a folder that contains a Git repository.'
+          );
+          elements['changes-list'].appendChild(noRepository);
           selectedPath = '';
-          restoreChangesListScrollTop(scrollTop, selectedRoot);
+          finishChangesRender(scrollTop, selectedRoot, focusTarget);
           return;
         }
 
         if (changesCollapsed) {
-          restoreChangesListScrollTop(scrollTop, selectedRoot);
+          finishChangesRender(scrollTop, selectedRoot, focusTarget);
           return;
         }
 
         if (changes.length === 0 && ignoredFiles.length === 0) {
-          elements['changes-list'].appendChild(empty('No local changes', 'Edit files in this repository. Checked files will be staged automatically.'));
+          const noChanges = empty(
+            'No local changes',
+            'Edit files in this repository. Checked files will be staged automatically.'
+          );
+          elements['changes-list'].appendChild(noChanges);
           selectedPath = '';
-          restoreChangesListScrollTop(scrollTop, selectedRoot);
+          finishChangesRender(scrollTop, selectedRoot, focusTarget);
           return;
         }
 
-        if (changes.length > 0 && (!selectedPath || !changes.some(function (change) { return change.path === selectedPath; }))) {
+        const selectedPathExists = changes.some(function (change) { return change.path === selectedPath; });
+
+        if (changes.length > 0 && (!selectedPath || !selectedPathExists)) {
           selectedPath = changes[0].path;
         }
 
@@ -2438,15 +3447,19 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           changes
             .slice()
             .sort(compareChangesByPath)
-            .forEach(function (change) {
-              fragment.appendChild(fileRow(change, 0, { showDirectory: true }));
-            });
+            .forEach(
+              function (change) {
+                fragment.appendChild(fileRow(change, 0, { showDirectory: true }));
+              }
+            );
         } else {
           const tree = buildChangeTree(changes);
 
-          tree.children.forEach(function (node) {
-            appendTreeNode(fragment, node, 0);
-          });
+          tree.children.forEach(
+            function (node) {
+              appendTreeNode(fragment, node, 0);
+            }
+          );
         }
 
         if (ignoredFiles.length > 0) {
@@ -2454,13 +3467,15 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           ignoredTitle.className = 'ignored-group';
           ignoredTitle.textContent = 'Ignored Files ' + ignoredFiles.length;
           fragment.appendChild(ignoredTitle);
-          ignoredFiles.forEach(function (change) {
-            fragment.appendChild(ignoredFileRow(change));
-          });
+          ignoredFiles.forEach(
+            function (change) {
+              fragment.appendChild(ignoredFileRow(change));
+            }
+          );
         }
 
         elements['changes-list'].appendChild(fragment);
-        restoreChangesListScrollTop(scrollTop, selectedRoot);
+        finishChangesRender(scrollTop, selectedRoot, focusTarget);
       }
 
       function captureChangesListScrollTop() {
@@ -2471,10 +3486,60 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         return elements['changes-list'].scrollTop;
       }
 
+      function captureChangesListFocus() {
+        const activeElement = document.activeElement;
+
+        if (!activeElement
+          || !activeElement.matches('.file-checkbox')
+          || !elements['changes-list']?.contains(activeElement)) {
+          return null;
+        }
+
+        const row = activeElement.closest(
+          '.file-row[data-path], .folder-row[data-folder-path]'
+        );
+
+        if (!row) {
+          return null;
+        }
+
+        return row.matches('.file-row')
+          ? { kind: 'file', path: row.dataset.path || '' }
+          : { kind: 'folder', path: row.dataset.folderPath || '' };
+      }
+
+      function finishChangesRender(scrollTop, selectedRoot, focusTarget) {
+        restoreChangesListFocus(focusTarget, selectedRoot);
+        restoreChangesListScrollTop(scrollTop, selectedRoot);
+      }
+
+      function restoreChangesListFocus(focusTarget, selectedRoot) {
+        if (!focusTarget
+          || lastRenderedChangesRoot !== selectedRoot
+          || !elements['changes-list']) {
+          return;
+        }
+
+        const rowSelector = focusTarget.kind === 'folder'
+          ? '.folder-row[data-folder-path]'
+          : '.file-row[data-path]';
+        const dataKey = focusTarget.kind === 'folder' ? 'folderPath' : 'path';
+        const row = Array.from(elements['changes-list'].querySelectorAll(rowSelector)).find(
+          function (candidate) {
+            return candidate.dataset[dataKey] === focusTarget.path;
+          }
+        );
+        row?.querySelector('.file-checkbox')?.focus({ preventScroll: true });
+      }
+
       function restoreChangesListScrollTop(scrollTop, selectedRoot) {
+        cancelChangesScrollRestore();
+
         if (!Number.isFinite(scrollTop) || lastRenderedChangesRoot !== selectedRoot) {
           return;
         }
+
+        scrollRestoreTarget = scrollTop;
 
         const restore = function () {
           if (lastRenderedChangesRoot !== selectedRoot || !elements['changes-list']) {
@@ -2487,7 +3552,34 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         };
 
         restore();
-        window.requestAnimationFrame(restore);
+        scrollRestoreFrame = requestFrame(
+          function () {
+            scrollRestoreFrame = 0;
+            restore();
+            scrollRestoreTarget = null;
+          }
+        );
+      }
+
+      function handleChangesListScroll() {
+        if (scrollRestoreTarget === null || !elements['changes-list']) {
+          return;
+        }
+
+        if (Math.abs(elements['changes-list'].scrollTop - scrollRestoreTarget) > 1) {
+          cancelChangesScrollRestore();
+        }
+      }
+
+      function cancelChangesScrollRestore() {
+        if (!scrollRestoreFrame) {
+          scrollRestoreTarget = null;
+          return;
+        }
+
+        cancelFrame(scrollRestoreFrame);
+        scrollRestoreFrame = 0;
+        scrollRestoreTarget = null;
       }
 
       function expandAllFolders() {
@@ -2516,17 +3608,19 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         const tree = buildChangeTree(state.changes || []);
         const paths = [];
 
-        tree.children.forEach(function walk(node) {
-          if (node.type !== 'folder') {
-            return;
-          }
+        tree.children.forEach(
+          function walk(node) {
+            if (node.type !== 'folder') {
+              return;
+            }
 
-          if (node.path) {
-            paths.push(node.path);
-          }
+            if (node.path) {
+              paths.push(node.path);
+            }
 
-          node.children.forEach(walk);
-        });
+            node.children.forEach(walk);
+          }
+        );
 
         return paths;
       }
@@ -2630,6 +3724,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         const partiallyChecked = !allChecked && node.includedCount > 0;
 
         row.className = 'tree-row folder-row';
+        row.dataset.folderPath = node.path;
         row.style.paddingLeft = treePadding(depth);
         row.title = node.path + '\\n' + node.includedCount + '/' + node.fileCount + ' checked';
 
@@ -2648,7 +3743,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         checkbox.type = 'checkbox';
         checkbox.checked = allChecked;
         checkbox.indeterminate = partiallyChecked;
-        checkbox.disabled = Boolean(state.busy);
+        checkbox.disabled = isGitInteractionBusy();
         checkbox.addEventListener('click', function (event) {
           event.stopPropagation();
           const paths = collectFilePaths(node);
@@ -2703,7 +3798,7 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         checkbox.type = 'checkbox';
         checkbox.checked = Boolean(change.staged && !change.partiallyStaged);
         checkbox.indeterminate = Boolean(change.partiallyStaged);
-        checkbox.disabled = Boolean(state.busy);
+        checkbox.disabled = isGitInteractionBusy();
         checkbox.addEventListener('click', function (event) {
           event.stopPropagation();
         });
@@ -2748,7 +3843,11 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           selectPath(change.path);
         });
         row.addEventListener('dblclick', function () {
-          vscode.postMessage({ type: 'openDiff', path: change.path });
+          if (!isGitInteractionBusy()) {
+            vscode.postMessage(
+              { type: 'openDiff', root: state.selectedRoot, path: change.path }
+            );
+          }
         });
 
         return row;
@@ -2823,161 +3922,254 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       function countFullyCheckedPaths(paths) {
         const pathSet = new Set(paths);
 
-        return (state.changes || []).filter(function (change) {
-          return pathSet.has(change.path) && change.staged && !change.partiallyStaged;
-        }).length;
+        return (state.changes || []).filter(
+          function (change) {
+            return pathSet.has(change.path) && change.staged && !change.partiallyStaged;
+          }
+        ).length;
       }
 
       function queueStagingChanges(paths, checked) {
-        const requestId = pendingStagingRequestId || nextStagingRequestId();
-        pendingStagingRequestId = requestId;
+        const root = String(state.selectedRoot || '');
+        const stagedPaths = uniquePaths(paths);
 
-        uniquePaths(paths).forEach(function (filePath) {
-          pendingStagingStates.set(filePath, Boolean(checked));
-          optimisticStagingStates.set(filePath, {
-            checked: Boolean(checked),
-            requestId: requestId
-          });
-        });
-
-        scheduleStagingDebounce();
-      }
-
-      function nextStagingRequestId() {
-        stagingRequestSequence += 1;
-        return stagingRequestSession + '-' + stagingRequestSequence;
-      }
-
-      function scheduleStagingDebounce() {
-        if (stagingDebounceTimer) {
-          window.clearTimeout(stagingDebounceTimer);
-        }
-
-        stagingDebounceTimer = window.setTimeout(function () {
-          stagingDebounceTimer = 0;
-          flushPendingStagingChanges();
-        }, stagingDebounceDelayMs);
-      }
-
-      function flushPendingStagingChanges() {
-        const requestId = pendingStagingRequestId;
-        const changes = Array.from(pendingStagingStates.entries()).map(
-          function ([path, checked]) {
-            return { path: path, checked: checked };
-          }
-        );
-
-        if (stagingDebounceTimer) {
-          window.clearTimeout(stagingDebounceTimer);
-          stagingDebounceTimer = 0;
-        }
-
-        pendingStagingStates.clear();
-        pendingStagingRequestId = '';
-
-        if (!requestId || changes.length === 0) {
+        if (!root || stagedPaths.length === 0) {
           return;
         }
 
-        vscode.postMessage({
-          type: 'applyStagingBatch',
-          requestId: requestId,
-          changes: changes
-        });
+        const requestId = nextRequestId();
+        const changes = stagedPaths.map(
+          function (filePath) {
+            optimisticStagingStates.set(
+              filePath,
+              {
+                checked: Boolean(checked),
+                requestId: requestId
+              }
+            );
+
+            return { path: filePath, checked: Boolean(checked) };
+          }
+        );
+
+        vscode.postMessage(
+          {
+            type: 'applyStagingBatch',
+            root: root,
+            requestId: requestId,
+            changes: changes
+          }
+        );
       }
 
-      function clearPendingStagingChanges() {
-        if (stagingDebounceTimer) {
-          window.clearTimeout(stagingDebounceTimer);
-          stagingDebounceTimer = 0;
-        }
+      function normalizeMessageVersion(value) {
+        const version = Number(value);
 
-        pendingStagingStates.clear();
-        pendingStagingRequestId = '';
+        return Number.isSafeInteger(version) && version >= 0 ? version : 0;
+      }
+
+      function nextRequestId() {
+        requestSequence += 1;
+        return requestSession + '-' + requestSequence;
       }
 
       function applyOptimisticStagingOverlay(nextState) {
-        if (optimisticStagingStates.size === 0 || nextState.errorText) {
-          if (nextState.errorText) {
-            optimisticStagingStates.clear();
-            clearPendingStagingChanges();
-          }
-
+        if (optimisticStagingStates.size === 0 && optimisticHunkStates.size === 0) {
           return nextState;
         }
 
         const reconciliation = reconcileOptimisticStagingChanges(
           nextState.changes,
           optimisticStagingStates,
-          nextState.confirmedStagingRequestIds
+          nextState.confirmedStagingRequestIds,
+          nextState.failedStagingRequestIds
         );
-        optimisticStagingStates.clear();
-        reconciliation.optimisticStagingStates.forEach(function (optimisticState, filePath) {
-          optimisticStagingStates.set(filePath, optimisticState);
-        });
+        const previewPath = nextState.diffPreview?.path || nextState.selectedPath || '';
 
-        if (!reconciliation.hasOverlay) {
+        optimisticStagingStates.clear();
+        reconciliation.optimisticStagingStates.forEach(
+          function (optimisticState, filePath) {
+            optimisticStagingStates.set(filePath, optimisticState);
+          }
+        );
+
+        const previewOptimisticState = optimisticStagingStates.get(previewPath);
+        const retainedHunkStates = reconcileOptimisticHunkStates(
+          optimisticHunkStates,
+          nextState.confirmedStagingRequestIds,
+          nextState.failedStagingRequestIds,
+          nextState.diffPreview
+        );
+        optimisticHunkStates.clear();
+        retainedHunkStates.forEach(
+          function (optimisticState, requestId) {
+            optimisticHunkStates.set(requestId, optimisticState);
+          }
+        );
+
+        let diffPreview = nextState.diffPreview;
+
+        if (previewOptimisticState) {
+          diffPreview = applyCheckedToDiffPreview(
+            nextState.diffPreview,
+            Boolean(previewOptimisticState.checked)
+          );
+        }
+
+        let hasHunkOverlay = false;
+
+        optimisticHunkStates.forEach(
+          function (optimisticState) {
+            if (optimisticState.root !== nextState.selectedRoot
+              || optimisticState.path !== previewPath) {
+              return;
+            }
+
+            const overlaidDiffPreview = applyHunkCheckedToDiffPreview(
+              diffPreview,
+              optimisticState.hunkId,
+              optimisticState.checked
+            );
+
+            if (overlaidDiffPreview !== diffPreview) {
+              diffPreview = overlaidDiffPreview;
+              hasHunkOverlay = true;
+            }
+          }
+        );
+
+        if (!reconciliation.hasOverlay
+          && !previewOptimisticState
+          && !hasHunkOverlay) {
           return nextState;
         }
 
         const changes = reconciliation.changes;
         const stagedCount = changes.filter(function (change) { return change.staged; }).length;
 
-        return Object.assign({}, nextState, {
+        return {
+          ...nextState,
           changes: changes,
+          diffPreview: diffPreview,
           stagedCount: stagedCount,
           totalCount: changes.length,
           canGenerate: stagedCount > 0,
           statusText: changeSummaryFromCounts(stagedCount, changes.length)
-        });
+        };
+      }
+
+      function applyCheckedToDiffPreview(preview, checked) {
+        if (!preview) {
+          return preview;
+        }
+
+        const currentHunks = preview.hunks || [];
+        const includedCount = checked ? currentHunks.length : 0;
+        const alreadySynchronized = preview.fileIncluded === checked
+          && preview.filePartiallyIncluded === false
+          && preview.includedCount === includedCount
+          && currentHunks.every(
+            function (hunk) {
+              return Boolean(hunk.included) === checked;
+            }
+          );
+
+        if (alreadySynchronized) {
+          return preview;
+        }
+
+        const hunks = currentHunks.map(
+          function (hunk) {
+            return Boolean(hunk.included) === checked
+              ? hunk
+              : { ...hunk, included: checked };
+          }
+        );
+
+        return {
+          ...preview,
+          fileIncluded: checked,
+          filePartiallyIncluded: false,
+          hunks: hunks,
+          includedCount: includedCount
+        };
+      }
+
+      function applyHunkCheckedToDiffPreview(preview, hunkId, checked) {
+        if (!preview) {
+          return preview;
+        }
+
+        if (!(preview.hunks || []).some(function (hunk) { return hunk.id === hunkId; })) {
+          return preview;
+        }
+
+        const hunks = (preview.hunks || []).map(
+          function (hunk) {
+            return hunk.id === hunkId ? { ...hunk, included: checked } : hunk;
+          }
+        );
+        const includedCount = hunks.filter(function (hunk) { return hunk.included; }).length;
+
+        return {
+          ...preview,
+          hunks: hunks,
+          includedCount: includedCount,
+          fileIncluded: hunks.length > 0 && includedCount === hunks.length,
+          filePartiallyIncluded: includedCount > 0 && includedCount < hunks.length
+        };
       }
 
       function uniquePaths(paths) {
-        return Array.from(new Set((paths || []).map(function (filePath) {
-          return String(filePath || '');
-        }).filter(Boolean)));
+        const unique = new Set();
+
+        for (const filePath of paths || []) {
+          const normalizedPath = String(filePath || '');
+
+          if (normalizedPath) {
+            unique.add(normalizedPath);
+          }
+        }
+
+        return Array.from(unique);
       }
 
       function localCheckedChange(change, checked) {
-        return Object.assign({}, change, {
+        return {
+          ...change,
           staged: checked,
           hasStaged: checked,
           hasUnstaged: !checked,
           partiallyStaged: false
-        });
+        };
       }
 
       function setLocalChecked(paths, checked) {
         const pathSet = new Set(paths);
-        const changes = (state.changes || []).map(function (change) {
-          if (!pathSet.has(change.path)) {
-            return change;
-          }
+        const changes = (state.changes || []).map(
+          function (change) {
+            if (!pathSet.has(change.path)) {
+              return change;
+            }
 
-          return localCheckedChange(change, checked);
-        });
+            return localCheckedChange(change, checked);
+          }
+        );
         const stagedCount = changes.filter(function (change) { return change.staged; }).length;
 
-        state = Object.assign({}, state, {
+        state = {
+          ...state,
           changes: changes,
           diffPreview: state.diffPreview && pathSet.has(selectedPath)
-            ? Object.assign({}, state.diffPreview, {
-              fileIncluded: checked,
-              filePartiallyIncluded: false,
-              hunks: (state.diffPreview.hunks || []).map(function (hunk) {
-                return Object.assign({}, hunk, { included: checked });
-              }),
-              includedCount: checked ? (state.diffPreview.hunks || []).length : 0
-            })
+            ? applyCheckedToDiffPreview(state.diffPreview, checked)
             : state.diffPreview,
           stagedCount: stagedCount,
           totalCount: changes.length,
           canGenerate: stagedCount > 0,
-          statusText: changeSummaryFromCounts(stagedCount, changes.length),
-          errorText: ''
-        });
+          statusText: changeSummaryFromCounts(stagedCount, changes.length)
+        };
 
-        scheduleLocalRender();
+        scheduleLocalStagingRender(pathSet);
       }
 
       function treePadding(depth) {
@@ -2987,12 +4179,15 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
       function renderCommitPanel() {
         const message = state.message || '';
         const textarea = elements.message;
+        const gitInteractionBusy = isGitInteractionBusy();
 
-        if (document.activeElement !== textarea && textarea.value !== message) {
+        if (textarea.value !== message) {
           textarea.value = message;
         }
 
+        textarea.disabled = gitInteractionBusy;
         elements.amend.checked = Boolean(state.amend);
+        elements.amend.disabled = gitInteractionBusy;
         const previousCommit = String(state.lastCommit || '').trim();
         elements['last-commit'].hidden = !previousCommit;
         elements['last-commit'].textContent = previousCommit ? previousCommit + '\\u2304' : '';
@@ -3001,34 +4196,50 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements['busy-overlay'].classList.toggle('visible', Boolean(state.busy));
         elements['busy-text'].textContent = state.busyText || 'Loading...';
 
-        const hasMessage = textarea.value.trim().length > 0;
         const hasRepo = Boolean(state.selectedRoot);
         const hasChanges = (state.totalCount || 0) > 0;
         const selectedChange = (state.changes || []).find(function (change) {
           return change.path === selectedPath;
         });
-        const hasFolders = viewMode === 'directory' && hasChanges && collectFolderPaths().length > 0;
-        elements.commit.disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
-        elements['commit-push'].disabled = Boolean(state.busy) || !hasRepo || !hasMessage;
-        elements.generate.disabled = Boolean(state.busy) || !hasRepo || !state.canGenerate;
-        elements['commit-language'].disabled = Boolean(state.busy);
-        elements['stage-all'].disabled = Boolean(state.busy) || !hasRepo || !hasChanges;
-        elements['unstage-all'].disabled = Boolean(state.busy) || !hasRepo || state.stagedCount === 0;
-        elements['rollback-selected'].disabled = Boolean(state.busy)
+        const hasFolders = viewMode === 'directory'
+          && hasChanges
+          && (state.changes || []).some(
+            function (change) {
+              return String(change.path || '').includes('/');
+            }
+          );
+        elements['changes-count'].textContent = String(state.totalCount || 0);
+        elements['changes-summary'].textContent = state.busy
+          ? 'updating...'
+          : changeSummary();
+        renderCommitMessageControls();
+        elements.generate.disabled = gitInteractionBusy || !hasRepo || !state.canGenerate;
+        elements['commit-language'].disabled = gitInteractionBusy;
+        elements['stage-all'].disabled = gitInteractionBusy || !hasRepo || !hasChanges;
+        elements['unstage-all'].disabled = gitInteractionBusy || !hasRepo || state.stagedCount === 0;
+        elements['rollback-selected'].disabled = gitInteractionBusy
           || !selectedChange
           || selectedChange.untracked
-          || selectedChange.kind === 'added';
-        elements['shelve-selected'].disabled = Boolean(state.busy) || !selectedChange;
-        elements['view-options'].disabled = !hasRepo;
-        elements['diff-preview-toggle'].disabled = !hasRepo || !hasChanges;
-        elements['open-selected-diff'].disabled = !hasRepo || !selectedPath;
-        elements['locate-active-file'].disabled = !hasRepo;
-        elements['expand-all'].disabled = !hasFolders;
-        elements['collapse-all'].disabled = !hasFolders;
+          || selectedChange.kind === 'added'
+          || selectedChange.kind === 'copied';
+        elements['shelve-selected'].disabled = gitInteractionBusy || !selectedChange;
+        elements['view-options'].disabled = gitInteractionBusy || !hasRepo;
+        elements['diff-preview-toggle'].disabled = gitInteractionBusy || !hasRepo || !hasChanges;
+        elements['open-selected-diff'].disabled = gitInteractionBusy || !hasRepo || !selectedPath;
+        elements['locate-active-file'].disabled = gitInteractionBusy || !hasRepo;
+        elements['expand-all'].disabled = gitInteractionBusy || !hasFolders;
+        elements['collapse-all'].disabled = gitInteractionBusy || !hasFolders;
         renderViewModeControls();
 
         elements['footer-status'].textContent = state.errorText || state.statusText || '';
         elements['footer-status'].classList.toggle('error', Boolean(state.errorText));
+      }
+
+      function renderCommitMessageControls() {
+        const hasMessage = elements.message.value.trim().length > 0;
+        const unavailable = isGitInteractionBusy() || !state.selectedRoot || !hasMessage;
+        elements.commit.disabled = unavailable;
+        elements['commit-push'].disabled = unavailable;
       }
 
       function renderDiffPreview() {
@@ -3039,11 +4250,13 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           return;
         }
 
-        const preview = state.diffPreview;
+        const preview = currentDiffPreview();
         const content = elements['diff-content'];
+        const renderPosition = captureDiffRenderPosition();
         const differences = preview?.differenceCount || 0;
         const included = preview?.includedCount || 0;
         const hasSelection = Boolean(selectedPath);
+        const gitInteractionBusy = isGitInteractionBusy();
         elements['diff-stats'].textContent = differences
           + (differences === 1 ? ' difference, ' : ' differences, ')
           + included
@@ -3053,44 +4266,163 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         elements['diff-pathbar'].hidden = !showBreadcrumbs;
         elements['diff-file-checkbox'].checked = Boolean(preview?.fileIncluded);
         elements['diff-file-checkbox'].indeterminate = Boolean(preview?.filePartiallyIncluded);
-        elements['diff-file-checkbox'].disabled = Boolean(state.busy)
+        elements['diff-file-checkbox'].disabled = gitInteractionBusy
           || !preview?.canToggleFile
           || !hasSelection;
-        elements['diff-prev-file'].disabled = (state.changes || []).length < 2;
-        elements['diff-next-file'].disabled = (state.changes || []).length < 2;
-        elements['diff-edit-source'].disabled = !hasSelection;
-        elements['diff-open-native'].disabled = !hasSelection;
-        elements['diff-prev-change'].disabled = differences === 0;
-        elements['diff-next-change'].disabled = differences === 0;
+        elements['diff-prev-file'].disabled = gitInteractionBusy || (state.changes || []).length < 2;
+        elements['diff-next-file'].disabled = gitInteractionBusy || (state.changes || []).length < 2;
+        elements['diff-edit-source'].disabled = gitInteractionBusy || !hasSelection;
+        elements['diff-open-native'].disabled = gitInteractionBusy || !hasSelection;
+        elements['diff-prev-change'].disabled = gitInteractionBusy || differences === 0;
+        elements['diff-next-change'].disabled = gitInteractionBusy || differences === 0;
         elements['diff-viewer'].value = diffViewer;
         elements['diff-ignore-policy'].value = diffIgnorePolicy;
         elements['diff-highlight-policy'].value = diffHighlightPolicy;
         elements['diff-collapse-unchanged'].classList.toggle('active', collapseUnchanged);
         elements['diff-collapse-unchanged'].setAttribute('aria-pressed', collapseUnchanged ? 'true' : 'false');
         elements['diff-body'].className = 'diff-body highlight-' + diffHighlightPolicy + (softWrap ? ' soft-wrap' : '');
-        content.replaceChildren();
 
         if (state.diffLoading) {
+          if (lastRenderedDiffPath === selectedPath && content.querySelector('.diff-hunk')) {
+            return;
+          }
+
+          content.replaceChildren();
           content.appendChild(diffEmpty('Loading differences...'));
+          finishDiffRender(renderPosition);
           return;
         }
+
+        content.replaceChildren();
 
         if (!preview) {
           content.appendChild(diffEmpty(hasSelection
             ? 'Loading differences...'
             : 'Select a changed file to preview it.'));
+          finishDiffRender(renderPosition);
           return;
         }
 
         if (!Array.isArray(preview.hunks) || preview.hunks.length === 0) {
           content.appendChild(diffEmpty(preview.message || 'No textual differences.'));
+          finishDiffRender(renderPosition);
           return;
         }
 
         activeHunkIndex = clamp(activeHunkIndex, 0, preview.hunks.length - 1);
-        preview.hunks.forEach(function (hunk, index) {
-          content.appendChild(renderDiffHunk(hunk, index, preview));
-        });
+        preview.hunks.forEach(
+          function (hunk, index) {
+            content.appendChild(renderDiffHunk(hunk, index, preview));
+          }
+        );
+        finishDiffRender(renderPosition);
+      }
+
+      function captureDiffRenderPosition() {
+        const activeElement = document.activeElement;
+        const focusedHunkId = activeElement
+          && activeElement.matches('.diff-hunk-header > .file-checkbox')
+          && elements['diff-content'].contains(activeElement)
+          ? activeElement.dataset.hunkId || ''
+          : '';
+
+        return {
+          path: lastRenderedDiffPath,
+          scrollTop: elements['diff-body'].scrollTop,
+          focusedHunkId: focusedHunkId
+        };
+      }
+
+      function finishDiffRender(renderPosition) {
+        lastRenderedDiffPath = selectedPath;
+        cancelDiffScrollRestore();
+
+        if (!renderPosition || renderPosition.path !== selectedPath) {
+          return;
+        }
+
+        diffScrollRestoreFrame = requestFrame(
+          function () {
+            diffScrollRestoreFrame = 0;
+
+            if (lastRenderedDiffPath !== renderPosition.path) {
+              return;
+            }
+
+            elements['diff-body'].scrollTop = renderPosition.scrollTop;
+
+            if (!renderPosition.focusedHunkId) {
+              return;
+            }
+
+            const hunkCheckboxes = Array.from(
+              elements['diff-content'].querySelectorAll('.diff-hunk-header > .file-checkbox')
+            );
+            const hunkCheckbox = hunkCheckboxes.find(
+              function (checkbox) {
+                return checkbox.dataset.hunkId === renderPosition.focusedHunkId;
+              }
+            );
+            hunkCheckbox?.focus({ preventScroll: true });
+          }
+        );
+      }
+
+      function restoreSettledHunkFocus(focusTarget) {
+        if (!focusTarget
+          || focusTarget.root !== state.selectedRoot
+          || focusTarget.path !== selectedPath) {
+          return;
+        }
+
+        const preview = currentDiffPreview();
+        const index = resolveHunkFocusIndex(preview?.hunks, focusTarget);
+
+        if (index < 0) {
+          return;
+        }
+
+        const hunkCheckboxes = Array.from(
+          elements['diff-content'].querySelectorAll('.diff-hunk-header > .file-checkbox')
+        );
+        const checkbox = hunkCheckboxes[index];
+        const activeElement = document.activeElement;
+        const focusWasNotMoved = !activeElement
+          || activeElement === document.body
+          || activeElement === document.documentElement
+          || activeElement === checkbox;
+
+        if (!document.hasFocus()
+          || !focusWasNotMoved
+          || !checkbox
+          || checkbox.disabled) {
+          return;
+        }
+
+        checkbox.focus({ preventScroll: true });
+      }
+
+      function cancelDiffScrollRestore() {
+        if (!diffScrollRestoreFrame) {
+          return;
+        }
+
+        cancelFrame(diffScrollRestoreFrame);
+        diffScrollRestoreFrame = 0;
+      }
+
+      function currentDiffPreview() {
+        const preview = state.diffPreview;
+
+        if (!preview) {
+          return undefined;
+        }
+
+        if (preview.path && preview.path !== selectedPath) {
+          return undefined;
+        }
+
+        return preview;
       }
 
       function renderDiffHunk(hunk, index, preview) {
@@ -3103,19 +4435,61 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         const checkbox = document.createElement('input');
         checkbox.className = 'file-checkbox';
         checkbox.type = 'checkbox';
+        checkbox.dataset.hunkId = String(hunk.id || '');
         checkbox.checked = Boolean(hunk.included);
-        checkbox.disabled = Boolean(state.busy)
+        checkbox.disabled = isGitInteractionBusy()
           || !preview.canToggleHunks
-          || hunk.canToggle === false;
+          || hunk.canToggle === false
+          || isHunkStagingPending(hunk.id);
         checkbox.title = hunk.included ? 'Exclude this difference from commit' : 'Include this difference in commit';
-        checkbox.addEventListener('change', function (event) {
-          vscode.postMessage({
-            type: 'toggleHunk',
-            path: selectedPath,
-            hunkId: hunk.id,
-            checked: event.target.checked
-          });
-        });
+        checkbox.addEventListener(
+          'change',
+          function (event) {
+            const checked = Boolean(event.target.checked);
+            const requestId = nextRequestId();
+            const root = String(state.selectedRoot || '');
+            const path = String(selectedPath || '');
+            pendingHunkFocus = {
+              requestId: requestId,
+              root: root,
+              path: path,
+              index: index,
+              hunkId: String(hunk.id || ''),
+              rawPatch: Array.isArray(hunk.rawLines) ? hunk.rawLines.join('\\n') : '',
+              header: String(hunk.header || '')
+            };
+            optimisticHunkStates.set(
+              requestId,
+              {
+                root: root,
+                path: path,
+                hunkId: hunk.id,
+                checked: checked,
+                confirmed: false
+              }
+            );
+            state = {
+              ...state,
+              diffPreview: applyHunkCheckedToDiffPreview(
+                state.diffPreview,
+                hunk.id,
+                checked
+              )
+            };
+            event.target.disabled = true;
+            renderLocalHunkIncluded(section, checked);
+            vscode.postMessage(
+              {
+                type: 'toggleHunk',
+                root: root,
+                path: path,
+                requestId: requestId,
+                hunkId: hunk.id,
+                checked: checked
+              }
+            );
+          }
+        );
 
         const title = document.createElement('span');
         title.textContent = hunk.header || 'Changed fragment';
@@ -3140,6 +4514,34 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
         }
 
         return section;
+      }
+
+      function renderLocalHunkIncluded(section, checked) {
+        const header = section.querySelector('.diff-hunk-header');
+        const source = header?.querySelector('.diff-hunk-source');
+        header?.classList.toggle('included', Boolean(checked));
+
+        if (source) {
+          source.textContent = checked ? 'Included changes' : 'Not included';
+        }
+
+        const hunkCheckboxes = Array.from(
+          elements['diff-content'].querySelectorAll('.diff-hunk-header > .file-checkbox')
+        );
+        const included = hunkCheckboxes
+          .filter(
+            function (checkbox) {
+              return checkbox.checked;
+            }
+          )
+          .length;
+        const differences = hunkCheckboxes.length;
+        elements['diff-stats'].textContent = differences
+          + (differences === 1 ? ' difference, ' : ' differences, ')
+          + included
+          + ' included';
+        elements['diff-file-checkbox'].checked = differences > 0 && included === differences;
+        elements['diff-file-checkbox'].indeterminate = included > 0 && included < differences;
       }
 
       function renderUnifiedDiffRow(line, preview) {
@@ -3975,8 +5377,14 @@ function getVscodeModule() {
 
 module.exports = {
   buildFileIconTheme,
+  mergeHostStatePatch,
+  planStateRender,
+  reconcileOptimisticHunkStates,
   reconcileOptimisticStagingChanges,
+  reconcileVersionedField,
   renderWebview,
+  resolveHunkFocusIndex,
   resolveActiveFileIconTheme,
-  resolveFolderCheckboxChecked
+  resolveFolderCheckboxChecked,
+  synchronizeDiffPreviewWithChanges
 };
