@@ -69,13 +69,13 @@ Clone the repository and package it as a VSIX with the VS Code Extension Manager
 
 ```powershell
 npx @vscode/vsce package
-code --install-extension .\phpstorm-git-panel-0.3.5.vsix
+code --install-extension .\phpstorm-git-panel-0.4.1.vsix
 ```
 
 For a WSL remote extension host, install that VSIX into the target WSL window:
 
 ```powershell
-code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.3.5.vsix
+code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.4.1.vsix
 ```
 
 Reload VS Code after installation and open the `PhpStorm Git` Activity Bar item.

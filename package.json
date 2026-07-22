@@ -2,7 +2,7 @@
   "name": "phpstorm-git-panel",
   "displayName": "PhpStorm Commit Panel for VS Code",
   "description": "PhpStorm-style Git commit panel for VS Code with inline diff preview, partial staging, view options, amend, push, and configurable AI messages.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "vetal",
   "homepage": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel#readme",
   "repository": {
