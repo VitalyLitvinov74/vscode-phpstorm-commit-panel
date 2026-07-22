@@ -5,9 +5,15 @@ const fs = require('fs');
 const path = require('path');
 const {
   buildFileIconTheme,
+  mergeHostStatePatch,
+  planStateRender,
+  reconcileOptimisticHunkStates,
   reconcileOptimisticStagingChanges,
+  reconcileVersionedField,
   renderWebview,
-  resolveFolderCheckboxChecked
+  resolveFolderCheckboxChecked,
+  resolveHunkFocusIndex,
+  synchronizeDiffPreviewWithChanges
 } = require('../src/webview');
 
 function run() {
@@ -74,6 +80,12 @@ function run() {
   );
 
   testParentFolderUncheckSurvivesStaleGitStates();
+  testPartialHostPatchUsesAuthoritativeBase();
+  testAuthoritativePreviewSurvivesUnrelatedPartialPatch();
+  testVersionedAmendSurvivesAnOlderHostPatch();
+  testSettledHunkRequestReleasesItsOptimisticLock();
+  testSettledHunkFocusSurvivesAnAuthoritativeIdChange();
+  testSelectiveStateRenderPlan();
 
   assert.match(
     html,
@@ -207,8 +219,8 @@ function run() {
   );
   assert.match(
     html,
-    /elements\['commit-language'\]\.disabled = Boolean\(state\.busy\);/,
-    'language selector must stay available as a setting and only be disabled while the panel is busy'
+    /elements\['commit-language'\]\.disabled = gitInteractionBusy;/,
+    'language selector must lock while Git work or repository selection is pending'
   );
   assert.match(
     html,
@@ -241,28 +253,43 @@ function run() {
   );
   assert.match(
     html,
-    /window\.requestAnimationFrame\(restore\)/,
-    'changes list scroll restoration must survive browser layout updates after rerender'
+    /function captureChangesListFocus\(\)[\s\S]*?function restoreChangesListFocus\(focusTarget, selectedRoot\)[\s\S]*?focus\(\{ preventScroll: true \}\)/,
+    'necessary tree rebuilds must restore the focused file or folder checkbox'
   );
   assert.match(
     html,
-    /render\(\{ changesScrollTop: scrollTop \}\)/,
-    'incoming state updates for the same repository must keep the changes list scroll position'
+    /cancelChangesScrollRestore\(\);[\s\S]*?scrollRestoreFrame = requestFrame\(\s*function \(\)/,
+    'a newer changes render must cancel an older scroll restoration frame'
   );
   assert.match(
     html,
-    /function renderChangesKeepingScroll\(\)[\s\S]*?scrollTop: captureChangesListScrollTop\(\)/,
-    'local changes list rerenders must preserve scrollTop'
+    /const renderPlan = planStateRender\([\s\S]*?render\(\s*renderPlan,\s*\{[\s\S]*?changesScrollTop: scrollTop,[\s\S]*?changesFocus: changesFocus,[\s\S]*?previousSelectedPath: previousSelectedPath[\s\S]*?\}\s*\)/,
+    'incoming state must use a selective render plan and preserve scroll only when the tree changes'
   );
   assert.match(
     html,
-    /function setLocalChecked\(paths, checked\)[\s\S]*?scheduleLocalRender\(\);/,
+    /function setLocalChecked\(paths, checked\)[\s\S]*?scheduleLocalStagingRender\(pathSet\);/,
     'checkbox staging must schedule one local render instead of rendering every rapid click synchronously'
   );
   assert.match(
     html,
-    /function scheduleLocalRender\(\)[\s\S]*?window\.requestAnimationFrame[\s\S]*?renderChangesKeepingScroll\(\);[\s\S]*?renderCommitPanel\(\);[\s\S]*?renderDiffPreview\(\);/,
-    'rapid checkbox changes must be coalesced into one render frame'
+    /function scheduleLocalStagingRender\(paths\)[\s\S]*?localRenderFrame = requestFrame[\s\S]*?renderLocalStagingState\(changedPaths\);/,
+    'rapid checkbox changes must be coalesced into one in-place render frame'
+  );
+  assert.match(
+    html,
+    /if \(plan\.changes\) \{[\s\S]*?cancelLocalStagingRender\(\);[\s\S]*?renderChanges\(/,
+    'a full tree render must cancel an older queued local staging frame'
+  );
+  assert.doesNotMatch(
+    html,
+    /function scheduleLocalStagingRender\(paths\)(?:(?!function renderLocalStagingState)[\s\S])*(?:renderChanges|renderDiffPreview)\(/,
+    'local staging must not replace the changes tree or diff content'
+  );
+  assert.match(
+    html,
+    /row\.dataset\.folderPath = node\.path;/,
+    'folder rows must expose stable paths for in-place checkbox and counter updates'
   );
   assert.match(
     html,
@@ -271,13 +298,13 @@ function run() {
   );
   assert.match(
     html,
-    /const stagingDebounceDelayMs = 350;[\s\S]*?const pendingStagingStates = new Map\(\);[\s\S]*?function queueStagingChanges\(paths, checked\)/,
-    'checkbox clicks must be debounced in the webview before they reach the extension host'
+    /function queueStagingChanges\(paths, checked\)[\s\S]*?type: 'applyStagingBatch'[\s\S]*?root: root[\s\S]*?requestId: requestId[\s\S]*?changes: changes/,
+    'checkbox clicks must immediately send a repository-scoped staging batch to the extension host'
   );
-  assert.match(
+  assert.doesNotMatch(
     html,
-    /function flushPendingStagingChanges\(\)[\s\S]*?type: 'applyStagingBatch'[\s\S]*?requestId: requestId[\s\S]*?changes: changes/,
-    'the webview must send one staging batch after the debounce window'
+    /stagingDebounceDelayMs|pendingStagingStates|flushPendingStagingChanges/,
+    'the webview must not hold staging changes in a second debounce queue'
   );
   assert.doesNotMatch(
     html,
@@ -359,6 +386,37 @@ function run() {
     /function resizeChangesWithKeyboard\(event\)/,
     'the preview commit splitter must remain keyboard-resizable'
   );
+  // Приемочный свидетель: pointermove не должен синхронно перечитывать layout.
+  assert.match(
+    html,
+    /function startResize\(event\)[\s\S]*?left: rect\.left,[\s\S]*?maxLeft: maxLeftPaneWidth\(rect\)[\s\S]*?function moveResize\(event\)[\s\S]*?event\.clientX - dragStart\.left/,
+    'the horizontal splitter must reuse geometry captured on pointerdown'
+  );
+  assert.doesNotMatch(
+    html,
+    /function moveResize\(event\)(?:(?!function stopResize)[\s\S])*?getBoundingClientRect/,
+    'horizontal pointermove must not force a synchronous layout read'
+  );
+  assert.match(
+    html,
+    /function startChangesResize\(event\)[\s\S]*?top: rect\.top,[\s\S]*?maximum: bounds\.maximum[\s\S]*?function moveChangesResize\(event\)[\s\S]*?event\.clientY - changesResizeStart\.top/,
+    'the vertical splitter must reuse geometry captured on pointerdown'
+  );
+  assert.doesNotMatch(
+    html,
+    /function moveChangesResize\(event\)(?:(?!function stopChangesResize)[\s\S])*?getBoundingClientRect/,
+    'vertical pointermove must not force a synchronous layout read'
+  );
+  assert.match(
+    html,
+    /function scheduleLayoutSize\(\)[\s\S]*?applyLayoutSize\(\);[\s\S]*?function applyLayoutSize\(shellRect\)[\s\S]*?applyPaneSize\(rect\);[\s\S]*?applyChangesPaneSize\(rect\);/,
+    'both splitters and window resize must share one animation-frame layout pass'
+  );
+  assert.match(
+    html,
+    /function applyChangesPaneSize\(rect\)[\s\S]*?changesPaneBounds\(rect\)[\s\S]*?const appliedChangesPaneHeight = clamp\([\s\S]*?appliedChangesPaneHeight \+ 'px'/,
+    'persisted changes pane height must be clamped without losing its preferred size'
+  );
   assert.match(
     html,
     /id="changes-root-checkbox"/,
@@ -387,8 +445,18 @@ function run() {
   });
   assert.match(
     html,
-    /type: pendingConfirmationAction[\s\S]*?path: selectedPath/,
-    'destructive or state-moving file actions must wait for explicit in-panel confirmation'
+    /function openConfirmation\(action, title, message\)[\s\S]*?const requestedRoot = state\.selectedRoot;[\s\S]*?pendingConfirmation = \{[\s\S]*?root: requestedRoot,[\s\S]*?path: requestedPath/,
+    'destructive confirmation must capture the repository and path when the dialog opens'
+  );
+  assert.match(
+    html,
+    /state\.selectedRoot === confirmation\.root[\s\S]*?type: confirmation\.action,[\s\S]*?root: confirmation\.root,[\s\S]*?path: confirmation\.path/,
+    'a confirmation must be discarded after a repository switch and otherwise use captured targets'
+  );
+  assert.match(
+    html,
+    /elements\['rollback-selected'\]\.disabled =[\s\S]*?selectedChange\.kind === 'added'[\s\S]*?selectedChange\.kind === 'copied'/,
+    'rollback must stay disabled for copied destinations that Git cannot restore safely'
   );
   [
     'Do not ignore',
@@ -406,33 +474,195 @@ function run() {
   });
   assert.match(
     html,
-    /type: 'toggleHunk'[\s\S]*?hunkId: hunk\.id[\s\S]*?checked: event\.target\.checked/,
-    'hunk checkboxes must request partial inclusion through stable hunk ids'
+    /checkbox\.addEventListener\(\s*'change'[\s\S]*?const root = state\.selectedRoot;[\s\S]*?event\.target\.disabled = true;[\s\S]*?renderLocalHunkIncluded\(section, checked\);[\s\S]*?type: 'toggleHunk'[\s\S]*?root: root[\s\S]*?requestId: requestId[\s\S]*?hunkId: hunk\.id[\s\S]*?checked: checked/,
+    'hunk checkboxes must lock locally and send repository-scoped requests with stable ids'
   );
   assert.match(
     html,
-    /type: 'selectChange', path: selectedPath/,
+    /function reconcileOptimisticHunkStates\([\s\S]*?failed\.has\(requestId\)[\s\S]*?confirmed\.has\(requestId\)[\s\S]*?continue;/,
+    'settled hunk request ids must release their exact optimistic locks'
+  );
+  assert.match(
+    html,
+    /checkbox\.disabled =[\s\S]*?isHunkStagingPending\(hunk\?\.id\)[\s\S]*?function isHunkStagingPending\(hunkId\)[\s\S]*?optimisticHunkStates\.values\(\)/,
+    'a pending hunk checkbox must remain disabled until its exact request settles'
+  );
+  assert.match(
+    html,
+    /type: 'selectChange', root: state\.selectedRoot, path: selectedPath/,
     'selecting a file while preview is visible must load its inline diff'
   );
   assert.match(
     html,
-    /function selectPath\(filePath\)[\s\S]*?vscode\.postMessage\(\{ type: 'selectChange', path: selectedPath \}\);[\s\S]*?function openSelectedDiff\(\)/,
-    'selecting a row must sync selectedPath to the extension host even when inline diff is hidden'
+    /function selectPath\(filePath\)[\s\S]*?if \(selectedPath === filePath\) \{[\s\S]*?return;[\s\S]*?renderSelection\(previousSelectedPath, selectedPath\);[\s\S]*?type: 'selectChange', root: state\.selectedRoot, path: selectedPath[\s\S]*?function openSelectedDiff\(\)/,
+    'selection must ignore no-op clicks, update row classes in place, and sync a real change to the host'
+  );
+  [
+    'stageAll',
+    'unstageAll',
+    'locateActiveFile',
+    'setAmend',
+    'generateCommitMessage',
+    'commit',
+    'commitAndPush',
+    'selectChange',
+    'openDiff',
+    'openFile'
+  ].forEach(
+    (messageType) => {
+      assert.match(
+        html,
+        new RegExp(`type: '${messageType}',[\\s\\S]{0,120}?root: state\\.selectedRoot`),
+        `${messageType} must be scoped to the repository visible when the action was requested`
+      );
+    }
+  );
+  // Приемочный свидетель: запоздалый UI старого repository не может направить Git action в новый root.
+  assert.match(
+    html,
+    /let pendingSelectedPath = '';[\s\S]*?else if \(pendingSelectedPath\)[\s\S]*?nextSelectedPath === pendingSelectedPath[\s\S]*?pendingSelectionExists && selectedPath === pendingSelectedPath[\s\S]*?keepLocalSelection = true/,
+    'late host selections must not replace a newer repository-local selection request'
   );
   assert.match(
     html,
-    /const keepLocalSelection = sameRoot[\s\S]*?!nextSelectedPath[\s\S]*?\(stateWithOverlay\.changes \|\| \[\]\)\.some/,
-    'late host refreshes without selectedPath must not erase a still-visible local row selection'
+    /type: 'selectRepository',[\s\S]*?root: root,[\s\S]*?requestId: requestId/,
+    'repository selection must include a unique request id'
   );
   assert.match(
     html,
-    /function applyOptimisticStagingOverlay\(nextState\)[\s\S]*?reconcileOptimisticStagingChanges\([\s\S]*?nextState\.confirmedStagingRequestIds/,
-    'late host refreshes must keep the latest debounced checkbox state visible until its exact Git request is confirmed'
+    /pendingRepositorySelection\.requestId === settledRepositorySelectionRequestId[\s\S]*?renderPlan\.repositories = true;[\s\S]*?renderPlan\.commit = true/,
+    'repository dropdown rollback must wait for the exact host settlement request id'
+  );
+  assert.match(
+    html,
+    /function isGitInteractionBusy\(\)[\s\S]*?Boolean\(pendingRepositorySelection\)/,
+    'a pending repository selection must count as a Git interaction lock'
+  );
+  assert.match(
+    html,
+    /pendingRepositorySelection = \{[\s\S]*?renderCommitPanel\(\);[\s\S]*?updateInteractiveState\(\);[\s\S]*?type: 'selectRepository'/,
+    'Git controls must lock locally while a repository selection is pending'
+  );
+  assert.match(
+    html,
+    /function selectPath\(filePath\) \{[\s\S]*?if \(isGitInteractionBusy\(\)\)[\s\S]*?function openSelectedDiff\(\)[\s\S]*?!isGitInteractionBusy\(\)/,
+    'old change rows and keyboard navigation must not act while repository selection is pending'
+  );
+  assert.match(
+    html,
+    /function updateChangesRootState\(changes\)[\s\S]*?disabled = isGitInteractionBusy\(\)[\s\S]*?function folderRow\(node, depth\)[\s\S]*?checkbox\.disabled = isGitInteractionBusy\(\)[\s\S]*?function fileRow\(change, depth, options\)[\s\S]*?checkbox\.disabled = isGitInteractionBusy\(\)/,
+    'a local tree rerender must preserve the pending repository interaction lock'
+  );
+  assert.match(
+    html,
+    /function applyOptimisticStagingOverlay\(nextState\)[\s\S]*?reconcileOptimisticStagingChanges\([\s\S]*?nextState\.confirmedStagingRequestIds,[\s\S]*?nextState\.failedStagingRequestIds/,
+    'late host refreshes must keep checkbox state visible until its exact Git request is confirmed or failed'
+  );
+  assert.match(
+    html,
+    /let hostState = state;[\s\S]*?const mergedHostState = mergeHostStatePatch\([\s\S]*?hostState,[\s\S]*?event\.data\.state,[\s\S]*?event\.data\.partial[\s\S]*?const nextState = synchronizeDiffPreviewWithChanges\(mergedHostState\);[\s\S]*?hostState = nextState;/,
+    'small host patches must merge into a separate authoritative state instead of an optimistic UI state'
+  );
+  assert.doesNotMatch(
+    html,
+    /function applyOptimisticStagingOverlay\(nextState\)[\s\S]*?nextState\.errorText[\s\S]*?optimisticStagingStates\.clear\(\)/,
+    'an unrelated or older error must not clear newer optimistic staging changes'
+  );
+  assert.match(
+    html,
+    /const previewOptimisticState = optimisticStagingStates\.get\(previewPath\);[\s\S]*?applyCheckedToDiffPreview\([\s\S]*?nextState\.diffPreview,[\s\S]*?Boolean\(previewOptimisticState\.checked\)/,
+    'incoming Git state must apply the same optimistic staging overlay to the selected diff'
   );
   assert.match(
     html,
     /function renderDiffPreview\(\)/,
     'inline diff must render from the host-provided model'
+  );
+  assert.match(
+    html,
+    /function currentDiffPreview\(\)[\s\S]*?preview\.path[\s\S]*?preview\.path !== selectedPath[\s\S]*?return undefined;/,
+    'a late diff model for another path must never replace the current preview'
+  );
+  assert.match(
+    html,
+    /elements\.message\.addEventListener\(\s*'input'[\s\S]*?localMessageVersion = Math\.max\([\s\S]*?localMessageVersion \+= 1;[\s\S]*?renderCommitMessageControls\(\);[\s\S]*?type: 'setMessage'[\s\S]*?messageVersion: localMessageVersion/,
+    'typing must send each monotonic draft update immediately without rendering the tree or diff'
+  );
+  assert.match(
+    html,
+    /if \(nextMessageVersion < localMessageVersion\)[\s\S]*?message: state\.message,[\s\S]*?messageVersion: localMessageVersion/,
+    'a stale host state must not overwrite a newer local commit draft'
+  );
+  // Приемочный свидетель: уничтожение webview не должно уничтожать черновик коммита.
+  assert.match(
+    html,
+    /message: persistedMessage,[\s\S]*?messageVersion: persistedMessageVersion[\s\S]*?function persistCommitDraft\(message, messageVersion\)[\s\S]*?vscode\.setState/,
+    'the webview state must persist both the commit draft and its monotonic version'
+  );
+  assert.match(
+    html,
+    /const restoredMessage = String\(state\.message \|\| ''\);[\s\S]*?elements\.message\.value = restoredMessage;[\s\S]*?type: 'setMessage',[\s\S]*?messageVersion: localMessageVersion[\s\S]*?type: 'ready'/,
+    'a recreated webview must restore its visible draft to the host before requesting initial state'
+  );
+  assert.match(
+    html,
+    /persistCommitDraft\(message, localMessageVersion\);/,
+    'every immediate draft update must also persist in webview state'
+  );
+  assert.match(
+    html,
+    /const busy = isGitInteractionBusy\(\);[\s\S]*?elements\['repo-select'\]\.disabled = busy;[\s\S]*?const gitInteractionBusy = isGitInteractionBusy\(\);[\s\S]*?textarea\.disabled = gitInteractionBusy;[\s\S]*?elements\.amend\.disabled = gitInteractionBusy;/,
+    'repository, commit text, and amend controls must lock during user operations'
+  );
+  assert.match(
+    html,
+    /if \(textarea\.value !== message\) \{[\s\S]*?textarea\.value = message;/,
+    'a generated or cleared host message must update the textarea even if it previously had focus'
+  );
+  assert.doesNotMatch(
+    html,
+    /document\.activeElement !== textarea/,
+    'textarea focus must not block a version-validated host draft update'
+  );
+  assert.doesNotMatch(
+    html,
+    /messageDebounce|pendingMessage|flushPendingMessageUpdate|scheduleMessageUpdate/,
+    'commit drafts must not wait in a lossy timer queue'
+  );
+  assert.doesNotMatch(
+    html,
+    /function toggleDiffPreview\(\)(?:(?!function applyPreviewLayout)[\s\S])*?setDiffPreviewEnabled(?:(?!function applyPreviewLayout)[\s\S])*?type: 'selectChange'/,
+    'showing the inline preview must not issue a duplicate selection request'
+  );
+  assert.match(
+    html,
+    /function captureDiffRenderPosition\(\)[\s\S]*?focusedHunkId[\s\S]*?function finishDiffRender\(renderPosition\)[\s\S]*?scrollTop = renderPosition\.scrollTop[\s\S]*?focus\(\{ preventScroll: true \}\)/,
+    'a same-file diff rebuild must restore its scroll position and focused hunk checkbox'
+  );
+  assert.match(
+    html,
+    /const pendingHunkRequestIdsBefore = Array\.from\(optimisticHunkStates\.keys\(\)\)[\s\S]*?pendingHunkRequestsChanged[\s\S]*?renderPlan\.commit = true;/,
+    'settling an exact hunk request must refresh disabled controls even when the visible diff is unchanged'
+  );
+  assert.match(
+    html,
+    /pendingHunkFocus = \{[\s\S]*?requestId: requestId,[\s\S]*?index: index,[\s\S]*?rawPatch:[\s\S]*?function takeSettledHunkFocus\(nextState\)[\s\S]*?includes\(requestId\)[\s\S]*?restoreSettledHunkFocus\(settledHunkFocus\)/,
+    'the exact settled hunk request must restore its keyboard focus even when Git changes the hunk id'
+  );
+  assert.match(
+    html,
+    /function restoreSettledHunkFocus\(focusTarget\)[\s\S]*?!document\.hasFocus\(\)[\s\S]*?!focusWasNotMoved/,
+    'hunk settlement must not steal focus after the user leaves the webview or moves to another control'
+  );
+  assert.match(
+    html,
+    /function renderDiffHunk\(hunk, index, preview\)[\s\S]*?checkbox\.disabled = isGitInteractionBusy\(\)[\s\S]*?isHunkStagingPending\(hunk\.id\)/,
+    'a pending hunk checkbox must stay disabled across diff rerenders'
+  );
+  assert.match(
+    html,
+    /collapsedFoldersByRoot[\s\S]*?function switchCollapsedFolderScope\(nextRoot\)/,
+    'collapsed directory state must be scoped to each repository'
   );
   assert.match(
     html,
@@ -458,17 +688,29 @@ function run() {
   );
   assert.ok(!html.includes('file-meta'), 'old wide file metadata column must not return');
 
-  assert.ok(
-    extensionSource.includes('applyOptimisticStagingStates(pathStates);'),
-    'extension host must optimistically update staged state'
+  assert.doesNotMatch(
+    extensionSource,
+    /applyOptimisticStagingStates/,
+    'the host must not publish a pre-Git checkbox state that a failure cannot roll back'
+  );
+  assert.doesNotMatch(
+    webviewSource,
+    /previousOptimisticStates[\s\S]*?confirmedOptimisticState/,
+    'a settled file request must not be reinserted only to cover a stale diff preview'
+  );
+  assert.match(
+    extensionSource,
+    /await git\.setPathsStaged\([\s\S]*?completedBatches\.push\(batch\);[\s\S]*?await this\.refreshStagingRoots\(touchedRoots\);[\s\S]*?confirmedStagingRequestIds\.push\(\.\.\.batch\.requestIds\);/,
+    'the extension host may confirm a checkbox only after Git succeeds and status is authoritative'
   );
   assert.ok(
     extensionSource.includes("case 'applyStagingBatch':"),
-    'extension host must accept debounced webview staging batches'
+    'extension host must accept immediate repository-scoped staging batches'
   );
-  assert.ok(
-    extensionSource.includes('requestId: String(requestId || \'\').slice(0, 200)'),
-    'debounced webview staging batches must flush to Git without a second debounce'
+  assert.match(
+    extensionSource,
+    /async applyStagingBatch\(changeStates, requestId, requestedRoot\)[\s\S]*?const normalizedRequestId = String\(requestId \|\| ''\)\.slice\(0, 200\);[\s\S]*?requestId: normalizedRequestId/,
+    'webview staging request ids must reach Git without a second debounce'
   );
   assert.ok(
     extensionSource.includes('queueStagingStates('),
@@ -481,7 +723,7 @@ function run() {
   assert.match(
     extensionSource,
     /const stagingStateVersion = this\.stagingStateVersion;[\s\S]*?if \(stagingStateVersion !== this\.stagingStateVersion\)/,
-    'a Git status read started before a staging request must not overwrite newer optimistic state'
+    'a Git status read started before a staging request must not overwrite newer queued staging intent'
   );
   assert.match(
     extensionSource,
@@ -490,7 +732,7 @@ function run() {
   );
   assert.match(
     extensionSource,
-    /for \(const batch of batches\)[\s\S]*?git\.stagePaths\(batch\.root, batch\.stagePaths\)[\s\S]*?git\.unstagePaths\(batch\.root, batch\.unstagePaths\)/,
+    /for \(const batch of batches\)[\s\S]*?git\.setPathsStaged\([\s\S]*?batch\.root,[\s\S]*?batch\.stagePaths,[\s\S]*?batch\.unstagePaths/,
     'one queued staging flush must apply grouped stage and unstage paths'
   );
   assert.ok(
@@ -615,34 +857,11 @@ function run() {
     /vscode\.window\.show(?:Error|Warning|Information)Message/,
     'extension must not use VS Code notification popups because they can play notification sounds'
   );
-  assert.ok(
-    extensionSource.includes("['accessibility.signals.sound', 'never']"),
-    'extension must disable VS Code accessibility signal sounds globally'
-  );
-  assert.ok(
-    extensionSource.includes("['accessibility.signals.diffLineDeleted.sound', 'never']"),
-    'extension must disable diff deleted-line sounds'
-  );
-  assert.ok(
-    extensionSource.includes("['accessibility.signals.diffLineModified.sound', 'never']"),
-    'extension must disable diff modified-line sounds'
-  );
-  assert.ok(
-    extensionSource.includes("['accessibility.signalOptions.volume', 0]"),
-    'extension must force VS Code signal volume to zero'
-  );
-  assert.ok(
-    extensionSource.includes("['terminal.integrated.enableBell', false]"),
-    'extension must also disable the integrated terminal bell'
-  );
-  assert.ok(
-    extensionSource.includes('vscode.ConfigurationTarget.Global'),
-    'sound settings must be written to the current VS Code host global settings'
-  );
-  assert.match(
+  // Приемочный свидетель: расширение не меняет глобальные настройки среды пользователя.
+  assert.doesNotMatch(
     extensionSource,
-    /async openDiff\(change\)[\s\S]*?await ensureEditorSoundsDisabled\(\);[\s\S]*?'vscode\.diff'/,
-    'diff opening must ensure editor sounds are disabled before showing the diff editor'
+    /accessibility\.signals|accessibility\.signalOptions|terminal\.integrated\.enableBell|ConfigurationTarget\.Global|ensureEditorSoundsDisabled/,
+    'the extension must leave global sound and accessibility preferences unchanged'
   );
   assert.deepEqual(
     manifest.extensionKind,
@@ -656,6 +875,170 @@ function run() {
   );
 }
 
+function testPartialHostPatchUsesAuthoritativeBase() {
+  const authoritativeChange = change('failed.txt', false);
+  const authoritativeState = {
+    changes: [authoritativeChange],
+    failedStagingRequestIds: []
+  };
+  const optimisticUiState = {
+    ...authoritativeState,
+    changes: [change('failed.txt', true)]
+  };
+  const mergedHostState = mergeHostStatePatch(
+    authoritativeState,
+    { failedStagingRequestIds: ['failed-request'] },
+    true
+  );
+  const reconciled = reconcileOptimisticStagingChanges(
+    mergedHostState.changes,
+    new Map(
+      [['failed.txt', { checked: true, requestId: 'failed-request' }]]
+    ),
+    [],
+    mergedHostState.failedStagingRequestIds
+  );
+
+  // Приемочный свидетель: partial failure откатывается к host base, а не к optimistic UI.
+  assert.equal(optimisticUiState.changes[0].staged, true);
+  assert.equal(reconciled.changes[0].staged, false);
+  assert.equal(reconciled.optimisticStagingStates.size, 0);
+
+  const clearedRepositoryState = mergeHostStatePatch(
+    { selectedRoot: '/repo', diffPreview: { path: 'failed.txt' } },
+    JSON.parse(JSON.stringify({ selectedRoot: null, diffPreview: null })),
+    true
+  );
+  assert.equal(clearedRepositoryState.selectedRoot, null);
+  assert.equal(clearedRepositoryState.diffPreview, null);
+}
+
+function testAuthoritativePreviewSurvivesUnrelatedPartialPatch() {
+  const staleHostState = {
+    selectedRoot: '/repo',
+    changes: [change('selected.txt', true)],
+    diffPreview: {
+      path: 'selected.txt',
+      fileIncluded: false,
+      filePartiallyIncluded: false,
+      includedCount: 0,
+      hunks: [{ id: 'selected-hunk', included: false }]
+    },
+    amend: false
+  };
+  const synchronizedState = synchronizeDiffPreviewWithChanges(staleHostState);
+  const afterUnrelatedPartial = synchronizeDiffPreviewWithChanges(
+    mergeHostStatePatch(
+      synchronizedState,
+      { amend: true },
+      true
+    )
+  );
+
+  // Приемочный свидетель: staging ack остаётся видимым после несвязанного partial до фонового diff refresh.
+  assert.equal(synchronizedState.diffPreview.fileIncluded, true);
+  assert.equal(synchronizedState.diffPreview.hunks[0].included, true);
+  assert.equal(afterUnrelatedPartial.diffPreview.fileIncluded, true);
+  assert.equal(afterUnrelatedPartial.diffPreview.hunks[0].included, true);
+  assert.strictEqual(
+    afterUnrelatedPartial.diffPreview,
+    synchronizedState.diffPreview,
+    'an already synchronized preview must retain identity and avoid a redundant diff rerender'
+  );
+}
+
+function testVersionedAmendSurvivesAnOlderHostPatch() {
+  const authoritativeState = {
+    selectedRoot: '/repo-a',
+    amend: false,
+    amendVersion: 0,
+    statusText: '1/1 checked'
+  };
+  const localState = {
+    ...authoritativeState,
+    amend: true,
+    amendVersion: 1
+  };
+  const oldPartialState = mergeHostStatePatch(
+    authoritativeState,
+    { statusText: 'Updating...' },
+    true
+  );
+  const preserved = reconcileVersionedField(
+    oldPartialState,
+    localState,
+    'amend',
+    'amendVersion',
+    1
+  );
+
+  // Приемочный свидетель: фоновый partial state не откатывает ещё не подтверждённый Amend.
+  assert.equal(preserved.state.amend, true);
+  assert.equal(preserved.state.amendVersion, 1);
+
+  const repositoryReset = reconcileVersionedField(
+    {
+      ...oldPartialState,
+      selectedRoot: '/repo-b',
+      amend: false,
+      amendVersion: 2
+    },
+    preserved.state,
+    'amend',
+    'amendVersion',
+    preserved.version
+  );
+
+  assert.equal(repositoryReset.state.amend, false);
+  assert.equal(repositoryReset.version, 2);
+  // Контрольный факт вне области изменения: более новая версия хоста остаётся авторитетной.
+}
+
+function testSettledHunkRequestReleasesItsOptimisticLock() {
+  const requestId = 'hunk-request';
+  const pending = new Map(
+    [
+      [
+        requestId,
+        {
+          root: '/repo',
+          path: 'file.txt',
+          hunkId: 'hunk-1',
+          checked: true
+        }
+      ]
+    ]
+  );
+  const unchangedPreview = {
+    path: 'file.txt',
+    hunks: [{ id: 'hunk-1', included: false }]
+  };
+  const beforeSettlement = reconcileOptimisticHunkStates(
+    pending,
+    [],
+    [],
+    unchangedPreview
+  );
+  const afterConfirmation = reconcileOptimisticHunkStates(
+    pending,
+    [requestId],
+    [],
+    unchangedPreview
+  );
+  const afterFailure = reconcileOptimisticHunkStates(
+    pending,
+    [],
+    [requestId],
+    unchangedPreview
+  );
+
+  assert.equal(beforeSettlement.size, 1);
+  // Приемочный свидетель: exact ack снимает lock даже если concurrent Git change вернул старый diff.
+  assert.equal(afterConfirmation.size, 0);
+  assert.equal(afterFailure.size, 0);
+  // Контрольный факт вне области изменения: незавершённый request сохраняет optimistic overlay.
+}
+
 function testParentFolderUncheckSurvivesStaleGitStates() {
   const originallyPartial = [
     change('parent/already-checked.cs', true),
@@ -665,10 +1048,10 @@ function testParentFolderUncheckSurvivesStaleGitStates() {
   const selectedRequest = 'panel-1';
   const unselectedRequest = 'panel-2';
 
-  const selectedOverlay = new Map(originallyPartial.slice(0, 2).map((item) => [
-    item.path,
-    { checked: true, requestId: selectedRequest }
-  ]));
+  const selectedOverlayEntries = originallyPartial.slice(0, 2).map(
+    (item) => [item.path, { checked: true, requestId: selectedRequest }]
+  );
+  const selectedOverlay = new Map(selectedOverlayEntries);
   const selectedBeforeConfirmation = reconcileOptimisticStagingChanges(
     originallyPartial,
     selectedOverlay,
@@ -681,10 +1064,10 @@ function testParentFolderUncheckSurvivesStaleGitStates() {
     'a stale partial Git state must not undo the parent folder or change an outside file'
   );
 
-  const unselectedOverlay = new Map(originallyPartial.slice(0, 2).map((item) => [
-    item.path,
-    { checked: false, requestId: unselectedRequest }
-  ]));
+  const unselectedOverlayEntries = originallyPartial.slice(0, 2).map(
+    (item) => [item.path, { checked: false, requestId: unselectedRequest }]
+  );
+  const unselectedOverlay = new Map(unselectedOverlayEntries);
   const staleSelectAllConfirmation = reconcileOptimisticStagingChanges(
     [
       change('parent/already-checked.cs', true),
@@ -725,6 +1108,226 @@ function testParentFolderUncheckSurvivesStaleGitStates() {
     confirmedUncheck.optimisticStagingStates.size,
     0,
     'the optimistic parent uncheck may clear only after its exact request is confirmed'
+  );
+
+  // Приемочный свидетель: подтверждение не должно возвращать устаревшее состояние Git.
+  const confirmedFileStates = new Map(
+    [
+      ['parent/previously-unchecked.cs', { checked: true, requestId: selectedRequest }]
+    ]
+  );
+  const confirmedFile = reconcileOptimisticStagingChanges(
+    [change('parent/previously-unchecked.cs', true)],
+    confirmedFileStates,
+    [selectedRequest]
+  );
+  const externallyUnstagedLater = reconcileOptimisticStagingChanges(
+    [change('parent/previously-unchecked.cs', false)],
+    confirmedFile.optimisticStagingStates,
+    [],
+    []
+  );
+
+  // Приемочный свидетель: settled overlay не маскирует последующий внешний unstage.
+  assert.equal(
+    confirmedFile.optimisticStagingStates.size,
+    0,
+    'an exact authoritative confirmation must release the optimistic file state'
+  );
+  assert.equal(
+    externallyUnstagedLater.changes[0].staged,
+    false,
+    'a later external index change must remain visible after the request settles'
+  );
+
+  const mixedRequestStates = new Map(
+    [
+      ['parent/already-checked.cs', { checked: false, requestId: selectedRequest }],
+      ['parent/previously-unchecked.cs', { checked: true, requestId: unselectedRequest }]
+    ]
+  );
+  const failedOlderRequest = reconcileOptimisticStagingChanges(
+    originallyPartial,
+    mixedRequestStates,
+    [],
+    [selectedRequest]
+  );
+
+  assert.equal(
+    failedOlderRequest.optimisticStagingStates.has('parent/already-checked.cs'),
+    false,
+    'a failed staging request must revert only its own optimistic path'
+  );
+  assert.equal(
+    failedOlderRequest.optimisticStagingStates.has('parent/previously-unchecked.cs'),
+    true,
+    'a newer optimistic staging request must survive an older request failure'
+  );
+  // Контрольный факт вне области изменения: соседний запрос остаётся оптимистичным.
+}
+
+function testSettledHunkFocusSurvivesAnAuthoritativeIdChange() {
+  const authoritativeHunks = [
+    {
+      id: 'new-source-id',
+      header: '@@ -1 +1 @@',
+      rawLines: ['@@ -1 +1 @@', '-old', '+new']
+    }
+  ];
+  const focusTarget = {
+    index: 0,
+    hunkId: 'old-source-id',
+    header: '@@ -1 +1 @@',
+    rawPatch: ['@@ -1 +1 @@', '-old', '+new'].join('\n')
+  };
+
+  // Приемочный свидетель: после exact settlement фокус следует за hunk при смене source-derived id.
+  assert.equal(resolveHunkFocusIndex(authoritativeHunks, focusTarget), 0);
+  assert.equal(resolveHunkFocusIndex([], focusTarget), -1);
+}
+
+function testSelectiveStateRenderPlan() {
+  assert.doesNotMatch(
+    planStateRender.toString(),
+    /JSON\.stringify|hunk\.lines\.map/,
+    'the render planner must not serialize or scan every rendered diff line'
+  );
+
+  const baseState = {
+    repositories: [{ root: 'repo-a', name: 'Repo A' }],
+    selectedRoot: 'repo-a',
+    changes: [change('src/app.js', false)],
+    ignoredFiles: [],
+    showIgnored: false,
+    diffPreviewEnabled: true,
+    selectedPath: 'src/app.js',
+    diffLoading: false,
+    diffPreview: {
+      path: 'src/app.js',
+      differenceCount: 1,
+      includedCount: 0,
+      hunks: [{ id: 'hunk-a', included: false, canToggle: true, lines: [{ type: 'add' }] }]
+    },
+    message: '',
+    statusText: '0/1 checked',
+    busy: false,
+    stagedCount: 0,
+    totalCount: 1
+  };
+  const textOnlyState = {
+    ...baseState,
+    message: 'Keep the caret stable',
+    statusText: 'Commit message updated'
+  };
+  const textOnlyPlan = planStateRender(
+    baseState,
+    textOnlyState,
+    baseState.selectedPath,
+    textOnlyState.selectedPath
+  );
+
+  assert.equal(textOnlyPlan.repositories, false, 'message updates must preserve the repository selector node');
+  assert.equal(textOnlyPlan.changes, false, 'message updates must preserve every changes tree node');
+  assert.equal(textOnlyPlan.selection, false, 'message updates must not touch row selection classes');
+  assert.equal(textOnlyPlan.diff, false, 'message updates must preserve the rendered diff nodes');
+  assert.equal(textOnlyPlan.commit, true, 'message updates must refresh lightweight commit controls');
+
+  const errorOnlyState = {
+    ...baseState,
+    errorText: 'A staging operation failed'
+  };
+  const errorOnlyPlan = planStateRender(
+    baseState,
+    errorOnlyState,
+    baseState.selectedPath,
+    errorOnlyState.selectedPath
+  );
+  assert.equal(
+    errorOnlyPlan.diff,
+    false,
+    'an error banner update alone must not reconstruct the diff'
+  );
+
+  const secondChange = change('src/other.js', true);
+  const selectionState = {
+    ...baseState,
+    changes: baseState.changes.concat(secondChange),
+    selectedPath: 'src/other.js'
+  };
+  const selectionBaseline = { ...selectionState, selectedPath: 'src/app.js' };
+  const selectionPlan = planStateRender(
+    selectionBaseline,
+    selectionState,
+    selectionBaseline.selectedPath,
+    selectionState.selectedPath
+  );
+
+  assert.equal(selectionPlan.changes, false, 'selection-only updates must not reconstruct the changes list');
+  assert.equal(selectionPlan.selection, true, 'selection-only updates must toggle existing row classes');
+  assert.equal(selectionPlan.diff, true, 'selection changes must update the preview');
+
+  const changedGitState = {
+    ...baseState,
+    changes: [change('src/app.js', true)],
+    stagedCount: 1
+  };
+  const changedGitPlan = planStateRender(
+    baseState,
+    changedGitState,
+    baseState.selectedPath,
+    baseState.selectedPath
+  );
+  assert.equal(
+    changedGitPlan.changes,
+    true,
+    'a real staging-state change must rerender the tree'
+  );
+
+  const changedDiffState = {
+    ...baseState,
+    diffPreview: {
+      ...baseState.diffPreview,
+      hunks: [{ id: 'hunk-b', included: false, canToggle: true, lines: [{ type: 'add' }] }]
+    }
+  };
+  const changedDiffPlan = planStateRender(
+    baseState,
+    changedDiffState,
+    baseState.selectedPath,
+    baseState.selectedPath
+  );
+  assert.equal(
+    changedDiffPlan.diff,
+    true,
+    'a new hunk id must rerender the diff without comparing every diff line'
+  );
+
+  const firstBlameState = {
+    ...baseState,
+    diffPreview: {
+      ...baseState.diffPreview,
+      blame: { 1: 'Alice, first revision' }
+    }
+  };
+  const changedBlameState = {
+    ...firstBlameState,
+    diffPreview: {
+      ...firstBlameState.diffPreview,
+      blame: { 1: 'Bob, corrected revision' }
+    }
+  };
+  const changedBlamePlan = planStateRender(
+    firstBlameState,
+    changedBlameState,
+    baseState.selectedPath,
+    baseState.selectedPath
+  );
+
+  // Приемочный свидетель: смена подписи blame при том же числе строк должна быть видна.
+  assert.equal(
+    changedBlamePlan.diff,
+    true,
+    'changed blame values must rerender the diff even when blame key count is unchanged'
   );
 }
 

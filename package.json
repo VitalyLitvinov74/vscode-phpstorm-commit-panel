@@ -1,7 +1,7 @@
 {
   "name": "phpstorm-git-panel",
   "displayName": "PhpStorm Commit Panel for VS Code",
-  "description": "PhpStorm-style Git commit panel for VS Code with inline diff preview, partial staging, amend, push, and configurable AI commit messages.",
+  "description": "PhpStorm-style Git commit panel for VS Code with inline diff preview, partial staging, view options, amend, push, and configurable AI messages.",
   "version": "0.4.0",
   "publisher": "vetal",
   "homepage": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel#readme",
@@ -47,7 +47,7 @@
   ],
   "main": "./extension.js",
   "scripts": {
-    "test": "node test/diff.test.js && node test/git.test.js && node test/stagingBatch.test.js && node test/codexCli.test.js && node test/webview.test.js"
+    "test": "node test/diff.test.js && node test/git.test.js && node test/stagingBatch.test.js && node test/codexCli.test.js && node test/webview.test.js && node test/extension.test.js"
   },
   "contributes": {
     "commands": [
@@ -99,7 +99,7 @@
       "properties": {
         "phpstormGitPanel.autoRefreshIntervalMs": {
           "type": "number",
-          "default": 3000,
+          "default": 5000,
           "minimum": 1000,
           "description": "How often the PhpStorm Commit Panel refreshes while visible."
         },
