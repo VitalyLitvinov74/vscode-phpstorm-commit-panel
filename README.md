@@ -54,6 +54,8 @@ Codex CLI setup:
 2. Set `phpstormGitPanel.commitMessageGenerator` to `codexCli`.
 3. Optionally choose another model, reasoning effort, executable path, or timeout in VS Code settings.
 
+In a WSL window, the panel gear button opens the extension's Remote settings so the machine-specific Codex CLI executable path is available alongside the provider options.
+
 The extension never asks for, reads, stores, or logs an API key. Authentication remains owned by Codex CLI. The staged diff is sent through the child process standard input instead of command-line arguments, and Codex runs in an ephemeral read-only session.
 
 At least one change must be checked. Use the language selector beside the sparkles button to choose Auto, English, or Russian output.

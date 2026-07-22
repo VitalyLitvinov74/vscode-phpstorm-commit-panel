@@ -555,8 +555,8 @@ function run() {
   );
   assert.equal(
     generatorSettings['phpstormGitPanel.commitMessageGenerator'].scope,
-    'machine',
-    'repositories must not be able to switch the external generator for the user'
+    'window',
+    'the provider selector must be visible in normal extension settings'
   );
   assert.equal(
     generatorSettings['phpstormGitPanel.codexCli.executablePath'].scope,
@@ -569,14 +569,29 @@ function run() {
     'Codex CLI must default to the economical model selected for commit generation'
   );
   assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.model'].scope,
+    'window',
+    'the Codex model selector must be visible in normal extension settings'
+  );
+  assert.equal(
     generatorSettings['phpstormGitPanel.codexCli.reasoningEffort'].default,
     'low',
     'Codex CLI must default to low reasoning effort for short commit messages'
   );
   assert.equal(
     generatorSettings['phpstormGitPanel.codexCli.reasoningEffort'].scope,
-    'machine',
-    'repositories must not be able to increase Codex reasoning cost'
+    'window',
+    'Codex generation options must be visible in normal extension settings'
+  );
+  assert.ok(
+    extensionSource.includes("'workbench.action.openRemoteSettings'")
+      && extensionSource.includes("query: '@ext:vetal.phpstorm-git-panel'"),
+    'the panel settings button must open this extension in the WSL remote settings scope'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.timeoutMs'].scope,
+    'window',
+    'the Codex timeout must be visible in normal extension settings'
   );
   assert.ok(
     extensionSource.includes("generatorSettings.provider === 'codexCli'")

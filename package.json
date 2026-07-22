@@ -118,7 +118,7 @@
             "Run the locally installed Codex CLI with its existing authentication."
           ],
           "default": "vscodeLanguageModel",
-          "scope": "machine",
+          "scope": "window",
           "description": "Selects the source used to generate Git commit messages."
         },
         "phpstormGitPanel.codexCli.executablePath": {
@@ -142,7 +142,7 @@
             "GPT-5.4 Mini"
           ],
           "default": "gpt-5.6-luna",
-          "scope": "machine",
+          "scope": "window",
           "description": "Model passed to `codex exec --model`. Availability depends on the current Codex CLI account."
         },
         "phpstormGitPanel.codexCli.reasoningEffort": {
@@ -155,7 +155,7 @@
             "max"
           ],
           "default": "low",
-          "scope": "machine",
+          "scope": "window",
           "description": "Reasoning effort used by Codex CLI. Low is recommended for short commit messages."
         },
         "phpstormGitPanel.codexCli.timeoutMs": {
@@ -163,7 +163,7 @@
           "default": 120000,
           "minimum": 5000,
           "maximum": 300000,
-          "scope": "machine",
+          "scope": "window",
           "description": "Maximum time to wait for Codex CLI commit message generation."
         }
       }

@@ -234,7 +234,7 @@ class PhpStormCommitPanelProvider {
         await this.commit(true);
         return;
       case 'openSettings':
-        await vscode.commands.executeCommand('workbench.action.openSettings', 'phpstormGitPanel');
+        await openExtensionSettings();
         return;
       default:
         return;
@@ -1254,6 +1254,16 @@ function getCommitMessageGeneratorSettings(root) {
   };
 }
 
+function openExtensionSettings() {
+  const command = vscode.env.remoteName
+    ? 'workbench.action.openRemoteSettings'
+    : 'workbench.action.openSettings';
+
+  return vscode.commands.executeCommand(command, {
+    query: '@ext:vetal.phpstorm-git-panel'
+  });
+}
+
 function normalizeConfiguredText(value, fallback) {
   const text = String(value ?? '').trim();
 
@@ -1362,7 +1372,7 @@ function activate(context) {
     vscode.commands.registerCommand('phpstormGitPanel.generateCommitMessage', () => provider.generateCommitMessage()),
     vscode.commands.registerCommand('phpstormGitPanel.commit', () => provider.commit(false)),
     vscode.commands.registerCommand('phpstormGitPanel.commitAndPush', () => provider.commit(true)),
-    vscode.commands.registerCommand('phpstormGitPanel.openSettings', () => vscode.commands.executeCommand('workbench.action.openSettings', 'phpstormGitPanel')),
+    vscode.commands.registerCommand('phpstormGitPanel.openSettings', () => openExtensionSettings()),
     vscode.workspace.onDidSaveTextDocument(() => provider.refresh()),
     vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh()),
     vscode.window.onDidChangeActiveTextEditor(() => provider.refresh())
