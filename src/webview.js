@@ -1173,13 +1173,33 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
     }
 
     .ai-button {
-      width: auto;
-      min-width: 82px;
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      min-width: 30px;
       height: 26px;
-      padding: 0 9px;
-      color: var(--text);
+      padding: 0;
+      color: var(--muted);
       background: var(--vscode-button-secondaryBackground, transparent);
       border: 1px solid var(--border-soft);
+    }
+
+    .ai-button:hover:not(:disabled),
+    .ai-button:focus-visible {
+      color: var(--accent);
+      border-color: var(--accent);
+      outline: none;
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+
+    .ai-button svg {
+      width: 17px;
+      height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.65;
     }
 
     .commit-editor-wrap {
@@ -1791,7 +1811,13 @@ function renderWebview(webview, fileIconThemeSource, extensionUri) {
           <option value="en">English</option>
           <option value="ru">Русский</option>
         </select>
-        <button id="generate" class="ai-button" title="Generate commit message with VS Code Language Model API">Generate</button>
+        <button id="generate" class="ai-button" title="Generate commit message" aria-label="Generate commit message">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 3.25c.42 2.93 1.82 4.33 4.75 4.75-2.93.42-4.33 1.82-4.75 4.75C11.58 9.82 10.18 8.42 7.25 8 10.18 7.58 11.58 6.18 12 3.25Z"></path>
+            <path d="M18.25 13.75c.24 1.68 1.07 2.51 2.75 2.75-1.68.24-2.51 1.07-2.75 2.75-.24-1.68-1.07-2.51-2.75-2.75 1.68-.24 2.51-1.07 2.75-2.75Z"></path>
+            <path d="M5.75 14.25c.18 1.26.81 1.89 2.07 2.07-1.26.18-1.89.81-2.07 2.07-.18-1.26-.81-1.89-2.07-2.07 1.26-.18 1.89-.81 2.07-2.07Z"></path>
+          </svg>
+        </button>
       </div>
 
       <div class="commit-editor-wrap">

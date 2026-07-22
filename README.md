@@ -24,7 +24,7 @@ This VS Code extension adds a separate Activity Bar view with a commit workflow 
 - Optimistic checkbox updates and coordinated background refreshes keep focus, selection, and scrolling stable while Git is busy.
 - `Commit` and `Commit and Push...` buttons inside the panel.
 - `Amend` support for updating the previous commit.
-- AI commit message generation through the VS Code Language Model API, with a panel language selector for Auto, English, or Russian output.
+- Configurable AI commit message generation through the standard VS Code Language Model API or a local Codex CLI installation, with a panel language selector for Auto, English, or Russian output.
 - Leaves the user's global VS Code accessibility and sound preferences unchanged.
 - Works with local and remote VS Code extension hosts, including WSL, when installed in that host.
 
@@ -42,15 +42,24 @@ VS Code's built-in Source Control view is powerful, but many developers moving f
 
 ## AI commit message generation
 
-The `Generate` button uses VS Code's built-in Language Model API. It does not require a separate OpenAI API key in this extension.
+The sparkles button generates a message from the checked/staged diff. The standard provider remains VS Code's built-in Language Model API, so existing setups keep working without configuration changes.
 
-Requirements:
+Open `PhpStorm Commit Panel` settings from the gear button to select one of these providers:
 
-- VS Code with Language Model API support.
-- GitHub Copilot Chat or another VS Code language model provider signed in and enabled.
-- At least one checked/staged change.
+- `VS Code Language Model (Standard)` uses GitHub Copilot Chat or another enabled VS Code language model provider.
+- `Codex CLI` runs the locally installed `codex exec` command with the CLI's existing authentication. The default model is `gpt-5.6-luna` with `low` reasoning effort for this short, repeatable task.
 
-Use the language selector beside `Generate` to choose Auto, English, or Russian commit message generation.
+Codex CLI setup:
+
+1. Install Codex CLI and run `codex login` in a terminal.
+2. Set `phpstormGitPanel.commitMessageGenerator` to `codexCli`.
+3. Optionally choose another model, reasoning effort, executable path, or timeout in VS Code settings.
+
+In a WSL window, the panel gear button opens the extension's Remote settings so the machine-specific Codex CLI executable path is available alongside the provider options.
+
+The extension never asks for, reads, stores, or logs an API key. Authentication remains owned by Codex CLI. The staged diff is sent through the child process standard input instead of command-line arguments, and Codex runs in an ephemeral read-only session.
+
+At least one change must be checked. Use the language selector beside the sparkles button to choose Auto, English, or Russian output.
 
 VS Code may ask for permission the first time the extension sends a language model request.
 
@@ -60,13 +69,13 @@ Clone the repository and package it as a VSIX with the VS Code Extension Manager
 
 ```powershell
 npx @vscode/vsce package
-code --install-extension .\phpstorm-git-panel-0.3.5.vsix
+code --install-extension .\phpstorm-git-panel-0.4.1.vsix
 ```
 
 For a WSL remote extension host, install that VSIX into the target WSL window:
 
 ```powershell
-code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.3.5.vsix
+code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.4.1.vsix
 ```
 
 Reload VS Code after installation and open the `PhpStorm Git` Activity Bar item.

@@ -204,6 +204,16 @@ function run() {
   );
   assert.match(
     html,
+    /<button id="generate" class="ai-button"[^>]*aria-label="Generate commit message"[^>]*>[\s\S]*?<svg[^>]*viewBox="0 0 24 24"[\s\S]*?<\/svg>[\s\S]*?<\/button>/,
+    'commit message generation must use an accessible SVG icon button'
+  );
+  assert.doesNotMatch(
+    html,
+    /<button id="generate"[^>]*>\s*Generate\s*<\/button>/,
+    'commit message generation button must not render the old text label'
+  );
+  assert.match(
+    html,
     /type: 'setCommitLanguage', language: event\.target\.value/,
     'language selector changes must be sent to the extension host'
   );
@@ -773,6 +783,62 @@ function run() {
   assert.ok(
     extensionSource.includes('Write the natural-language commit message text in Russian'),
     'Russian commit message generation must be explicitly supported'
+  );
+  const generatorSettings = manifest.contributes.configuration.properties;
+  assert.equal(
+    generatorSettings['phpstormGitPanel.commitMessageGenerator'].default,
+    'vscodeLanguageModel',
+    'the existing VS Code Language Model provider must remain the default'
+  );
+  assert.deepEqual(
+    generatorSettings['phpstormGitPanel.commitMessageGenerator'].enum,
+    ['vscodeLanguageModel', 'codexCli'],
+    'settings must let users switch between the standard provider and Codex CLI'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.commitMessageGenerator'].scope,
+    'window',
+    'the provider selector must be visible in normal extension settings'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.executablePath'].scope,
+    'machine',
+    'the external executable path must not be controlled by repository settings'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.model'].default,
+    'gpt-5.6-luna',
+    'Codex CLI must default to the economical model selected for commit generation'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.model'].scope,
+    'window',
+    'the Codex model selector must be visible in normal extension settings'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.reasoningEffort'].default,
+    'low',
+    'Codex CLI must default to low reasoning effort for short commit messages'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.reasoningEffort'].scope,
+    'window',
+    'Codex generation options must be visible in normal extension settings'
+  );
+  assert.ok(
+    extensionSource.includes("'workbench.action.openRemoteSettings'")
+      && extensionSource.includes("query: '@ext:vetal.phpstorm-git-panel'"),
+    'the panel settings button must open this extension in the WSL remote settings scope'
+  );
+  assert.equal(
+    generatorSettings['phpstormGitPanel.codexCli.timeoutMs'].scope,
+    'window',
+    'the Codex timeout must be visible in normal extension settings'
+  );
+  assert.ok(
+    extensionSource.includes("generatorSettings.provider === 'codexCli'")
+      && extensionSource.includes('generateCommitMessageWithVsCodeLanguageModel(generationContext)'),
+    'the Generate action must route through the configured provider while preserving the standard path'
   );
   assert.ok(
     webviewSource.includes('findIconThemeInExtensionRoots(activeThemeId)'),
