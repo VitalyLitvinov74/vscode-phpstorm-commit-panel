@@ -33,6 +33,10 @@ function run() {
     { fsPath: path.join(__dirname, '..') }
   );
   const extensionSource = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+  const settingsPanelSource = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'settingsPanel.js'),
+    'utf8'
+  );
   const webviewSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'webview.js'), 'utf8');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const fixtureIconTheme = buildFileIconTheme(
@@ -801,39 +805,17 @@ function run() {
     'the provider selector must be visible in normal extension settings'
   );
   assert.equal(
-    generatorSettings['phpstormGitPanel.codexCli.executablePath'].scope,
-    'machine',
-    'the external executable path must not be controlled by repository settings'
-  );
-  assert.equal(
-    generatorSettings['phpstormGitPanel.codexCli.model'].default,
-    'gpt-5.6-luna',
-    'Codex CLI must default to the economical model selected for commit generation'
-  );
-  assert.equal(
-    generatorSettings['phpstormGitPanel.codexCli.model'].scope,
-    'window',
-    'the Codex model selector must be visible in normal extension settings'
-  );
-  assert.equal(
-    generatorSettings['phpstormGitPanel.codexCli.reasoningEffort'].default,
-    'low',
-    'Codex CLI must default to low reasoning effort for short commit messages'
-  );
-  assert.equal(
-    generatorSettings['phpstormGitPanel.codexCli.reasoningEffort'].scope,
-    'window',
-    'Codex generation options must be visible in normal extension settings'
+    Object.keys(generatorSettings).some(
+      (key) => key.startsWith('phpstormGitPanel.codexCli.')
+    ),
+    false,
+    'Codex-only fields must not remain permanently visible in native settings'
   );
   assert.ok(
-    extensionSource.includes("'workbench.action.openRemoteSettings'")
-      && extensionSource.includes("query: '@ext:vetal.phpstorm-git-panel'"),
-    'the panel settings button must open this extension in the WSL remote settings scope'
-  );
-  assert.equal(
-    generatorSettings['phpstormGitPanel.codexCli.timeoutMs'].scope,
-    'window',
-    'the Codex timeout must be visible in normal extension settings'
+    settingsPanelSource.includes(
+      "codexSettings.hidden = provider.value !== 'codexCli';"
+    ),
+    'the extension settings panel must reveal Codex options only for Codex CLI'
   );
   assert.ok(
     extensionSource.includes("generatorSettings.provider === 'codexCli'")

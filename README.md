@@ -52,10 +52,10 @@ Open `PhpStorm Commit Panel` settings from the gear button to select one of thes
 Codex CLI setup:
 
 1. Install Codex CLI and run `codex login` in a terminal.
-2. Set `phpstormGitPanel.commitMessageGenerator` to `codexCli`.
-3. Optionally choose another model, reasoning effort, executable path, or timeout in VS Code settings.
+2. Open the extension settings from the panel gear button.
+3. Select `Codex CLI`. Its model, reasoning effort, executable path, and timeout settings appear only after this selection.
 
-In a WSL window, the panel gear button opens the extension's Remote settings so the machine-specific Codex CLI executable path is available alongside the provider options.
+In a WSL window, these settings are stored by the remote extension host. Existing Codex CLI values from version 0.4.1 are used as migration defaults.
 
 The extension never asks for, reads, stores, or logs an API key. Authentication remains owned by Codex CLI. The staged diff is sent through the child process standard input instead of command-line arguments, and Codex runs in an ephemeral read-only session.
 
@@ -69,13 +69,13 @@ Clone the repository and package it as a VSIX with the VS Code Extension Manager
 
 ```powershell
 npx @vscode/vsce package
-code --install-extension .\phpstorm-git-panel-0.4.1.vsix
+code --install-extension .\phpstorm-git-panel-0.4.2.vsix
 ```
 
 For a WSL remote extension host, install that VSIX into the target WSL window:
 
 ```powershell
-code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.4.1.vsix
+code --remote wsl+Ubuntu --install-extension .\phpstorm-git-panel-0.4.2.vsix
 ```
 
 Reload VS Code after installation and open the `PhpStorm Git` Activity Bar item.

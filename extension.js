@@ -5,13 +5,16 @@ const vscode = require('vscode');
 const git = require('./src/git');
 const { StagingBatch } = require('./src/stagingBatch');
 const { generateCommitMessageWithCodexCli } = require('./src/codexCli');
+const {
+  CommitGeneratorSettingsPanel,
+  readGeneratorSettings
+} = require('./src/settingsPanel');
 const { renderWebview, resolveActiveFileIconTheme } = require('./src/webview');
 
 const VIEW_ID = 'phpstormGitPanel.changes';
 const VIRTUAL_SCHEME = 'phpstorm-git-panel';
 const COMMIT_LANGUAGE_STORAGE_KEY = 'commitLanguage';
 const COMMIT_LANGUAGE_OPTIONS = new Set(['auto', 'en', 'ru']);
-const CODEX_REASONING_EFFORT_OPTIONS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const DIFF_IGNORE_POLICIES = new Set(['none', 'trim', 'all', 'all-and-empty', 'formatting']);
 const DEFAULT_LANGUAGE_MODEL_TIMEOUT_MS = 45_000;
 const VISIBILITY_REFRESH_DELAY_MS = 75;
@@ -325,7 +328,7 @@ class PhpStormCommitPanelProvider {
         await this.commit(true);
         return;
       case 'openSettings':
-        await openExtensionSettings();
+        await vscode.commands.executeCommand('phpstormGitPanel.openSettings');
         return;
       default:
         return;
@@ -1567,7 +1570,10 @@ class PhpStormCommitPanelProvider {
           throw new Error('No checked changes are staged for commit message generation.');
         }
 
-        const generatorSettings = getCommitMessageGeneratorSettings(root);
+        const generatorSettings = getCommitMessageGeneratorSettings(
+          root,
+          this.context.globalState
+        );
         const generationContext = {
           diff,
           changes: this.state.changes.filter((change) => change.staged),
@@ -2104,51 +2110,20 @@ function formatCommitLanguageInstruction(language) {
   }
 }
 
-function getCommitMessageGeneratorSettings(root) {
-  const configuration = vscode.workspace.getConfiguration(
-    'phpstormGitPanel',
+function getCommitMessageGeneratorSettings(root, globalState) {
+  const settings = readGeneratorSettings(
+    vscode,
+    globalState,
     vscode.Uri.file(root)
-  );
-  const configuredProvider = configuration.get(
-    'commitMessageGenerator',
-    'vscodeLanguageModel'
-  );
-  const configuredReasoningEffort = configuration.get(
-    'codexCli.reasoningEffort',
-    'low'
   );
 
   return {
-    provider: configuredProvider === 'codexCli' ? 'codexCli' : 'vscodeLanguageModel',
-    executable: normalizeConfiguredText(
-      configuration.get('codexCli.executablePath', 'codex'),
-      'codex'
-    ),
-    model: normalizeConfiguredText(
-      configuration.get('codexCli.model', 'gpt-5.6-luna'),
-      'gpt-5.6-luna'
-    ),
-    reasoningEffort: CODEX_REASONING_EFFORT_OPTIONS.has(configuredReasoningEffort)
-      ? configuredReasoningEffort
-      : 'low',
-    timeoutMs: configuration.get('codexCli.timeoutMs', 120000)
+    provider: settings.provider,
+    executable: settings.codex.executablePath,
+    model: settings.codex.model,
+    reasoningEffort: settings.codex.reasoningEffort,
+    timeoutMs: settings.codex.timeoutMs
   };
-}
-
-function openExtensionSettings() {
-  const command = vscode.env.remoteName
-    ? 'workbench.action.openRemoteSettings'
-    : 'workbench.action.openSettings';
-
-  return vscode.commands.executeCommand(command, {
-    query: '@ext:vetal.phpstorm-git-panel'
-  });
-}
-
-function normalizeConfiguredText(value, fallback) {
-  const text = String(value ?? '').trim();
-
-  return text && !text.includes('\0') ? text : fallback;
 }
 
 function stripWrappingQuotes(value) {
@@ -2359,6 +2334,7 @@ function isAbortError(error) {
 
 function activate(context) {
   const provider = new PhpStormCommitPanelProvider(context);
+  const settingsPanel = new CommitGeneratorSettingsPanel(vscode, context);
   const virtualDocuments = new GitVirtualDocumentProvider();
 
   context.subscriptions.push(
@@ -2381,7 +2357,7 @@ function activate(context) {
     ),
     vscode.commands.registerCommand(
       'phpstormGitPanel.openSettings',
-      () => openExtensionSettings()
+      () => settingsPanel.show(provider.state.selectedRoot)
     ),
     vscode.workspace.onDidSaveTextDocument(
       () => provider.refreshWhenVisible({ refreshDiff: true })

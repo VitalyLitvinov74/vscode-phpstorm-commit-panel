@@ -2,7 +2,7 @@
   "name": "phpstorm-git-panel",
   "displayName": "PhpStorm Commit Panel for VS Code",
   "description": "PhpStorm-style Git commit panel for VS Code with inline diff preview, partial staging, view options, amend, push, and configurable AI messages.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "vetal",
   "homepage": "https://github.com/VitalyLitvinov74/vscode-phpstorm-commit-panel#readme",
   "repository": {
@@ -43,11 +43,12 @@
     "onCommand:phpstormGitPanel.unstageAll",
     "onCommand:phpstormGitPanel.generateCommitMessage",
     "onCommand:phpstormGitPanel.commit",
-    "onCommand:phpstormGitPanel.commitAndPush"
+    "onCommand:phpstormGitPanel.commitAndPush",
+    "onCommand:phpstormGitPanel.openSettings"
   ],
   "main": "./extension.js",
   "scripts": {
-    "test": "node test/diff.test.js && node test/git.test.js && node test/stagingBatch.test.js && node test/codexCli.test.js && node test/webview.test.js && node test/extension.test.js"
+    "test": "node test/diff.test.js && node test/git.test.js && node test/stagingBatch.test.js && node test/codexCli.test.js && node test/settingsPanel.test.js && node test/webview.test.js && node test/extension.test.js"
   },
   "contributes": {
     "commands": [
@@ -119,52 +120,7 @@
           ],
           "default": "vscodeLanguageModel",
           "scope": "window",
-          "description": "Selects the source used to generate Git commit messages."
-        },
-        "phpstormGitPanel.codexCli.executablePath": {
-          "type": "string",
-          "default": "codex",
-          "scope": "machine",
-          "description": "Codex CLI executable name or absolute path. The extension does not read or store API keys."
-        },
-        "phpstormGitPanel.codexCli.model": {
-          "type": "string",
-          "enum": [
-            "gpt-5.6-luna",
-            "gpt-5.6-terra",
-            "gpt-5.6-sol",
-            "gpt-5.4-mini"
-          ],
-          "enumItemLabels": [
-            "GPT-5.6 Luna (Recommended, economical)",
-            "GPT-5.6 Terra",
-            "GPT-5.6 Sol",
-            "GPT-5.4 Mini"
-          ],
-          "default": "gpt-5.6-luna",
-          "scope": "window",
-          "description": "Model passed to `codex exec --model`. Availability depends on the current Codex CLI account."
-        },
-        "phpstormGitPanel.codexCli.reasoningEffort": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "default": "low",
-          "scope": "window",
-          "description": "Reasoning effort used by Codex CLI. Low is recommended for short commit messages."
-        },
-        "phpstormGitPanel.codexCli.timeoutMs": {
-          "type": "number",
-          "default": 120000,
-          "minimum": 5000,
-          "maximum": 300000,
-          "scope": "window",
-          "description": "Maximum time to wait for Codex CLI commit message generation."
+          "markdownDescription": "Selects the source used to generate Git commit messages. Use the panel gear button or run **PhpStorm Commit Panel: Open PhpStorm Commit Panel Settings** to configure Codex CLI after selecting it."
         }
       }
     },
